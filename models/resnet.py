@@ -11,7 +11,9 @@ from .utils.resnet_utils import conv1x1, get_kwargs, convtranspose1x1
 
 
 class ResNetEncoder(nn.Module):
-    def __init__(self, model_name, in_channels=3, out_channels=1024, compress_factor=16):
+    def __init__(
+        self, model_name, in_channels=3, out_channels=1024, compress_factor=16
+    ):
         super(ResNetEncoder, self).__init__()
 
         self._norm_layer = nn.BatchNorm2d
@@ -24,7 +26,9 @@ class ResNetEncoder(nn.Module):
         strides = kwargs["strides"]
         layers = kwargs["layers"]
         self.groups = kwargs["groups"] if "groups" in kwargs else 1
-        self.base_width = kwargs["width_per_group"] if "width_per_group" in kwargs else 64
+        self.base_width = (
+            kwargs["width_per_group"] if "width_per_group" in kwargs else 64
+        )
 
         modules: List[nn.Module] = []
 
@@ -54,13 +58,13 @@ class ResNetEncoder(nn.Module):
             )
 
         modules.append(
-            Conv2dNormActivation(
+            nn.Conv2d(
                 self.inplanes,
                 out_channels,
-                kernel_size=1,
+                kernel_size=3,
                 stride=1,
-                norm_layer=self._norm_layer,
-                activation_layer=nn.ReLU,
+                padding=1,
+                bias=False,
             )
         )
         self.features = nn.Sequential(*modules)
@@ -82,7 +86,11 @@ class ResNetEncoder(nn.Module):
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, self.groups, self.base_width))
+        layers.append(
+            block(
+                self.inplanes, planes, stride, downsample, self.groups, self.base_width
+            )
+        )
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
             layers.append(
@@ -117,17 +125,22 @@ class ResNetDecoder(nn.Module):
         strides = kwargs["strides"]
         layers = kwargs["layers"]
         self.groups = kwargs["groups"] if "groups" in kwargs else 1
-        self.base_width = kwargs["width_per_group"] if "width_per_group" in kwargs else 64
+        self.base_width = (
+            kwargs["width_per_group"] if "width_per_group" in kwargs else 64
+        )
 
         modules: List[nn.Module] = []
         input_planes = [planes[i] * block.expansion for i in range(len(planes))]
         self.inplanes = input_planes[0]
 
         modules.append(
+            nn.Conv2d(in_channels, self.inplanes, kernel_size=3, stride=1, padding=1)
+        )
+        modules.append(
             ConvTranspose2dNormActivation(
-                in_channels,
                 self.inplanes,
-                kernel_size=1,
+                self.inplanes,
+                kernel_size=3,
                 stride=1,
                 norm_layer=self._norm_layer,
                 activation_layer=nn.ReLU,
@@ -136,14 +149,14 @@ class ResNetDecoder(nn.Module):
 
         for i, (stride, layer) in enumerate(zip(strides, layers)):
             modules.append(
-                nn.Sequential(
-                    *self._make_layer(
-                        block,
-                        planes[i],
-                        layer,
-                        next_inplanes=planes[i + 1] * block.expansion if i + 1 < len(planes) else planes[i],
-                        stride=stride,
-                    )
+                self._make_layer(
+                    block,
+                    planes[i],
+                    layer,
+                    next_inplanes=planes[i + 1] * block.expansion
+                    if i + 1 < len(planes)
+                    else planes[i],
+                    stride=stride,
                 )
             )
 
@@ -162,11 +175,19 @@ class ResNetDecoder(nn.Module):
 
         modules.append(
             ConvTranspose2dNormActivation(
-                planes[-1], planes[-1], kernel_size=3, stride=1, norm_layer=self._norm_layer, activation_layer=nn.ReLU
+                planes[-1],
+                planes[-1],
+                kernel_size=3,
+                stride=1,
+                norm_layer=self._norm_layer,
+                activation_layer=nn.ReLU,
             )
         )
 
-        modules.append(nn.Conv2d(planes[-1], out_channels, kernel_size=1, stride=1, padding=0, bias=False))
+        modules.append(
+            nn.Conv2d(planes[-1], out_channels, kernel_size=3, stride=1, padding=1)
+        )
+        modules.append(nn.Tanh())
 
         self.features = nn.Sequential(*modules)
 
@@ -193,9 +214,14 @@ class ResNetDecoder(nn.Module):
 
         upsample = None
         if stride != 1 or self.inplanes != planes:
-            upsample = nn.Sequential(convtranspose1x1(self.inplanes, next_inplanes, stride), norm_layer(next_inplanes))
+            upsample = nn.Sequential(
+                convtranspose1x1(self.inplanes, next_inplanes, stride),
+                norm_layer(next_inplanes),
+            )
 
-        layers.append(block(next_inplanes, planes, stride, upsample, self.groups, self.base_width))
+        layers.append(
+            block(next_inplanes, planes, stride, upsample, self.groups, self.base_width)
+        )
         self.inplanes = next_inplanes
 
         return nn.Sequential(*layers)

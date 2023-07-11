@@ -102,7 +102,6 @@ class ConvTransposeNormActivation(torch.nn.Sequential):
                 padding = tuple(
                     (kernel_size[i] - 1) // 2 * dilation[i] for i in range(_conv_dim)
                 )
-        output_padding = stride - 1
 
         if bias is None:
             bias = norm_layer is None
@@ -110,19 +109,20 @@ class ConvTransposeNormActivation(torch.nn.Sequential):
         if bias is None:
             bias = norm_layer is None
 
-        layers = [
+        layers = [nn.Upsample(scale_factor=stride, mode="nearest")]
+        stride = 1
+        layers.append(
             conv_layer(
                 in_channels,
                 out_channels,
                 kernel_size,
                 stride,
                 padding,
-                output_padding,
                 dilation=dilation,
                 groups=groups,
                 bias=bias,
             )
-        ]
+        )
 
         if norm_layer is not None:
             layers.append(norm_layer(out_channels))
@@ -162,7 +162,7 @@ class ConvTranspose2dNormActivation(ConvTransposeNormActivation):
             dilation,
             inplace,
             bias,
-            torch.nn.ConvTranspose2d,
+            torch.nn.Conv2d,
         )
 
 
