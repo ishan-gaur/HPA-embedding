@@ -1,0 +1,7 @@
+/home/ishang/HPA-embedding/dev-dataset/C_1--Stage01
+/home/ishang/HPA-embedding/dev-dataset/11_TileScan 6--Stage00
+/home/ishang/HPA-embedding/dev-dataset/B_1--Stage01
+/home/ishang/HPA-embedding/dev-dataset/D_4--Stage20
+/home/ishang/HPA-embedding/dev-dataset/10_R1--Stage01
+/home/ishang/HPA-embedding/dev-dataset/TileScan 7_A5 Region1--Stage01
+/home/ishang/HPA-embedding/dev-dataset/field--X01--Y00_image--L0000--S00--U08--V04--J17--E02--O02--X01--Y00--T0000--Z00--C0
