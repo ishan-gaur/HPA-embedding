@@ -8,3 +8,7 @@ Once in the `HPA-Cell-Segmentation` directory, run `conda env create -f environm
 
 ``find /data/ishang/CCNB1-dataset/ -type d > data-folder.txt``
 And delete the top entry, which will be the parent directory
+
+main.py can be run to do the required pre-processing on your dataset
+you can do an interactive trial run on a dev dataset to set the necessary parameters using the data-process.ipynb notebook
+pipeline.py has the functions from this notebook but in a more strict api form that is called from main.py
