@@ -474,3 +474,14 @@ def create_data_path_index(image_paths, cell_mask_paths, nuclei_mask_paths, inde
         writer.writeheader()
         for sample_path in sample_paths:
             writer.writerow(sample_path)
+
+def load_data_path_index(data_dir):
+    index_file = data_dir / "index.csv"
+    if not index_file.exists():
+        raise ValueError(f"Index file {index_file} does not exist")
+    with open(index_file, "r") as f:
+        reader = csv.DictReader(f)
+        sample_paths = []
+        for row in reader:
+            sample_paths.append(row)
+    return sample_paths
