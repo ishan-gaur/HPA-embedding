@@ -18,7 +18,7 @@ from skimage import measure, segmentation, morphology, transform
 import matplotlib.pyplot as plt
 
 def save_channel_names(data_dir, channel_names):
-    with open(data_dir / "channel_names.txt", "w") as f:
+    with open(data_dir / "channel_names.txt", "w+") as f:
         f.write("\n".join(channel_names))
 
 def load_channel_names(data_dir):
@@ -103,7 +103,7 @@ def need_rebuild(file, rebuild):
         return False
 
 
-def get_masks(segmentator, image_paths, channel_names, dapi, tubl, anln, merge_missing=True, rebuild=False, display=False):
+def get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge_missing=True, rebuild=False, display=False):
     """
     Get the masks for the images in image_paths using HPA-Cell-Segmentation
     """
@@ -122,7 +122,7 @@ def get_masks(segmentator, image_paths, channel_names, dapi, tubl, anln, merge_m
         glob_channel_images = lambda image_path, c: list(glob(f"{str(image_path)}/**/*{channel_names[c]}.png", recursive=True))
         dapi_paths = sorted(glob_channel_images(image_path, dapi))
         tubl_paths = sorted(glob_channel_images(image_path, tubl))
-        anln_paths = sorted(glob_channel_images(image_path, anln)) if anln is not None else None
+        calb2_paths = sorted(glob_channel_images(image_path, calb2)) if calb2 is not None else None
 
         if len(dapi_paths) == 0 or len(tubl_paths) == 0:
             print(f"Missing DAPI or TUBULIN image in {image_path}")
@@ -131,16 +131,16 @@ def get_masks(segmentator, image_paths, channel_names, dapi, tubl, anln, merge_m
         
         for dapi_path, tubl_path in zip(dapi_paths, tubl_paths):
             assert str(dapi_path).split(channel_names[dapi])[0] == str(tubl_path).split(channel_names[tubl])[0], f"File mismatch for {dapi_path} and {tubl_path}"
-        if anln is not None and anln_paths is not None:
-            for dapi_path, anln_path in zip(dapi_paths, anln_paths):
-                assert str(dapi_path).split(channel_names[dapi])[0] == str(anln_path).split(channel_names[anln])[0], f"File mismatch for {dapi_path} and {anln_path}"
+        if calb2 is not None and calb2_paths is not None:
+            for dapi_path, anln_path in zip(dapi_paths, calb2_paths):
+                assert str(dapi_path).split(channel_names[dapi])[0] == str(anln_path).split(channel_names[calb2])[0], f"File mismatch for {dapi_path} and {anln_path}"
 
         load_image = lambda path_list: [cv2.imread(str(x), cv2.IMREAD_UNCHANGED) for x in path_list]
         dapi_images = load_image(dapi_paths)
         tubl_images = load_image(tubl_paths)
-        anln_images = load_image(anln_paths) if anln_paths is not None else None
+        calb2_images = load_image(calb2_paths) if calb2_paths is not None else None
 
-        ref_images = [tubl_images, anln_images, dapi_images]
+        ref_images = [tubl_images, calb2_images, dapi_images]
         nuc_segmentation = segmentator.pred_nuclei(ref_images[2])
         cell_segmentation = segmentator.pred_cells(ref_images)
 
@@ -181,7 +181,7 @@ def get_masks(segmentator, image_paths, channel_names, dapi, tubl, anln, merge_m
 
                 # show nuclei without cells if any
                 missing_cells = np.asarray(list(set(np.unique(nuclei_mask)) - set(np.unique(cell_mask))))
-                if len(missing_cells) > 0 and distplay:
+                if len(missing_cells) > 0 and display:
                     microshow(image[dapi] * np.isin(nuclei_mask, missing_cells), cmaps=["pure_blue"], label_text=f"Nuclei without cells: {missing_cells}")
 
                 # show cell masks and merge missing cells based on nuclei
@@ -424,7 +424,10 @@ def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_
         np.save(seg_image_paths[-1], images)
     return seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths
 
-def resize_and_normalize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths, target_dim, resize_type=cv2.INTER_LANCZOS4):
+channel_min = lambda x: torch.min(torch.min(x, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]
+channel_max = lambda x: torch.max(torch.max(x, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]
+
+def resize_and_normalize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths, target_dim, normalize=True, resize_type=cv2.INTER_LANCZOS4):
     target_dim = (target_dim, target_dim)
     final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths = [], [], []
     for (seg_image_path, seg_cell_mask_path, seg_nuclei_mask_path) in tqdm(list(zip(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths)), desc="Resizing images"):
@@ -444,7 +447,11 @@ def resize_and_normalize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_p
         resized_images = np.stack(resized_images, axis=0)
         resized_images = np.transpose(resized_images, (0, 3, 1, 2)) # B x C x H x W
         resized_images = torch.Tensor(resized_images.astype("float32"))
-        normalized_images = (resized_images - torch.min(resized_images)) / (torch.max(resized_images) - torch.min(resized_images))
+        # normalized_images = (resized_images - torch.min(resized_images, )) / (torch.max(resized_images) - torch.min(resized_images))
+        if normalize:
+            normalized_images = (resized_images - channel_min(resized_images)) / (channel_max(resized_images) - channel_min(resized_images))
+        else:
+            normalized_images = resized_images
 
         torch.save(normalized_images, seg_image_path.parent / "images.pt")
         final_image_paths.append(seg_image_path.parent / "images.pt")
@@ -485,3 +492,10 @@ def load_data_path_index(data_dir):
         for row in reader:
             sample_paths.append(row)
     return sample_paths
+
+def load_dir_images(data_dir):
+    sample_paths = load_data_path_index(data_dir)
+    images = []
+    for sample_path in tqdm(sample_paths, desc="Loading images"):
+        images.append(torch.load(Path(sample_path["image_path"])))
+    return images
