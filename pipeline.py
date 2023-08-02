@@ -17,11 +17,16 @@ from skimage import measure, segmentation, morphology, transform
 
 import matplotlib.pyplot as plt
 
+def has_channel_names(data_dir):
+    return os.path.exists(data_dir / "channel_names.txt")
+
 def save_channel_names(data_dir, channel_names):
     with open(data_dir / "channel_names.txt", "w+") as f:
         f.write("\n".join(channel_names))
 
 def load_channel_names(data_dir):
+    if not has_channel_names(data_dir):
+        raise Exception(f"Channel names not found at: {data_dir}. Please check that you've provided them to the CLI or main function.")
     with open(data_dir / "channel_names.txt", "r") as f:
         channel_names = f.read().splitlines()
     return channel_names
@@ -29,9 +34,9 @@ def load_channel_names(data_dir):
 def create_image_paths_file(data_dir, exists_ok=True, overwrite=False):
     if type(data_dir) == Path:
         data_dir = str(data_dir)
-    data_paths_file = "data-folder.txt"
+    data_paths_file = data_dir / "data-folder.txt"
 
-    if os.path.exists(data_paths_file):
+    if data_paths_file.exists():
         if not exists_ok:
             raise Exception(f"Image path index already exists at: {data_paths_file}")
         if overwrite:
@@ -45,9 +50,9 @@ def create_image_paths_file(data_dir, exists_ok=True, overwrite=False):
         subprocess.run(bash_create_index, shell=True)
         subprocess.run(bash_remove_top_line, shell=True)
         print("Image path index created at:", data_paths_file)
-    print("Number of target paths found:", end=" ")
     p = subprocess.run(f"cat {data_paths_file} | wc -l", shell=True, capture_output=True)
     num_paths = int(p.stdout.decode("utf-8").strip())
+    print(f"Number of target paths found: {num_paths}")
     return data_paths_file, num_paths
 
 def image_paths_from_folders(folders_file):
@@ -103,6 +108,26 @@ def need_rebuild(file, rebuild):
         return False
 
 
+def glob_channel_images(image_path, channel):
+    return list(glob(f"{str(image_path)}/**/*{channel}.png", recursive=True))
+
+def load_image_from_file(path_list):
+    return [cv2.imread(str(x), cv2.IMREAD_UNCHANGED) for x in path_list]
+
+def composite_images_from_paths(image_paths, channel_names):
+    path_images = []
+    for image_path in tqdm(image_paths, desc="Loading images"):
+        channels = []
+        for c in channel_names:
+            channel_paths = sorted(glob_channel_images(image_path, c))
+            channel_images = load_image_from_file(channel_paths)
+            channel_images = np.stack(channel_images, axis=0)
+            channels.append(channel_images)
+        path_images.append(np.stack(channels, axis=1))
+    path_images = np.concatenate(path_images)
+    return path_images
+
+
 def get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge_missing=True, rebuild=False, display=False):
     """
     Get the masks for the images in image_paths using HPA-Cell-Segmentation
@@ -119,10 +144,9 @@ def get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge_
             cell_mask_paths.append(image_path / "cell_masks.npy")
             continue
 
-        glob_channel_images = lambda image_path, c: list(glob(f"{str(image_path)}/**/*{channel_names[c]}.png", recursive=True))
-        dapi_paths = sorted(glob_channel_images(image_path, dapi))
-        tubl_paths = sorted(glob_channel_images(image_path, tubl))
-        calb2_paths = sorted(glob_channel_images(image_path, calb2)) if calb2 is not None else None
+        dapi_paths = sorted(glob_channel_images(image_path, channel_names[dapi]))
+        tubl_paths = sorted(glob_channel_images(image_path, channel_names[tubl]))
+        calb2_paths = sorted(glob_channel_images(image_path, channel_names[calb2])) if calb2 is not None else None
 
         if len(dapi_paths) == 0 or len(tubl_paths) == 0:
             print(f"Missing DAPI or TUBULIN image in {image_path}")
@@ -135,10 +159,10 @@ def get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge_
             for dapi_path, anln_path in zip(dapi_paths, calb2_paths):
                 assert str(dapi_path).split(channel_names[dapi])[0] == str(anln_path).split(channel_names[calb2])[0], f"File mismatch for {dapi_path} and {anln_path}"
 
-        load_image = lambda path_list: [cv2.imread(str(x), cv2.IMREAD_UNCHANGED) for x in path_list]
-        dapi_images = load_image(dapi_paths)
-        tubl_images = load_image(tubl_paths)
-        calb2_images = load_image(calb2_paths) if calb2_paths is not None else None
+        
+        dapi_images = load_image_from_file(dapi_paths)
+        tubl_images = load_image_from_file(tubl_paths)
+        calb2_images = load_image_from_file(calb2_paths) if calb2_paths is not None else None
 
         ref_images = [tubl_images, calb2_images, dapi_images]
         nuc_segmentation = segmentator.pred_nuclei(ref_images[2])
@@ -159,7 +183,7 @@ def get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge_
         images = []
         for c, channel in enumerate(channel_names):
             channel_paths = sorted(glob_channel_images(image_path, c))
-            channel_images = load_image(channel_paths)
+            channel_images = load_image_from_file(channel_paths)
             channel_images = np.stack(channel_images, axis=0)
             images.append(channel_images)
         images = np.stack(images, axis=1)
