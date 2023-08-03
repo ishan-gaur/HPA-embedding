@@ -20,7 +20,7 @@ stats_opt = ['norm', 'pix_range', 'int_img']
 parser = argparse.ArgumentParser(description='Dataset preprocessing pipline')
 parser.add_argument('--data_dir', type=str, help='Path to dataset, should be absolute path', required=True)
 parser.add_argument('--output_dir', type=str , help='Path to output directory, should be absolute path')
-parser.add_argument('--name', type=str, help='Name of dataset')
+parser.add_argument('--name', type=str, help='Name of dataset', required=True)
 parser.add_argument('--stats', type=str, help=f"Image stats to show, options include: {stats_opt}", choices=stats_opt)
 parser.add_argument('--viz_num', type=int, default=5, help='Number of samples to show')
 parser.add_argument('--calc_num', type=int, default=30, help='Number of samples to use for calculating image stats')
@@ -29,6 +29,7 @@ parser.add_argument('--image_mask_cache', action='store_true', help='Save images
 parser.add_argument('--normalize', action='store_true', help='Normalize images')
 parser.add_argument('--clean_masks', action='store_true', help='Clean masks: remove small objects and join cells without nuclei, etc.')
 parser.add_argument('--single_cell', action='store_true', help='Crop and save single cell images')
+parser.add_argument('--dino_cls', action='store_true', help='Cache dino cls embeddings')
 parser.add_argument('--device', type=int, default=7, help='GPU device number')
 parser.add_argument('--rebuild', action='store_true', help='Rebuild specifed steps even if files exist')
 
@@ -109,3 +110,6 @@ if args.single_cell or args.all:
         f.write("\n\n# Source of config module:\n")
         f.write(f"\n\n# Using normalized images from {NORM_INDEX}:\n")
         f.write(inspect.getsource(config))
+
+if args.dino_cls:
+    
