@@ -182,7 +182,7 @@ def get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge_
         # apply preprocessing mask if the user want to merge nuclei
         images = []
         for c, channel in enumerate(channel_names):
-            channel_paths = sorted(glob_channel_images(image_path, c))
+            channel_paths = sorted(glob_channel_images(image_path, channel_names[c]))
             channel_images = load_image_from_file(channel_paths)
             channel_images = np.stack(channel_images, axis=0)
             images.append(channel_images)
@@ -455,7 +455,7 @@ def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_
 channel_min = lambda x: torch.min(torch.min(x, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]
 channel_max = lambda x: torch.max(torch.max(x, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]
 
-def resize_and_normalize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths, target_dim, normalize=True, resize_type=cv2.INTER_LANCZOS4):
+def resize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths, target_dim, resize_type=cv2.INTER_LANCZOS4):
     target_dim = (target_dim, target_dim)
     final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths = [], [], []
     for (seg_image_path, seg_cell_mask_path, seg_nuclei_mask_path) in tqdm(list(zip(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths)), desc="Resizing images"):
@@ -476,12 +476,13 @@ def resize_and_normalize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_p
         resized_images = np.transpose(resized_images, (0, 3, 1, 2)) # B x C x H x W
         resized_images = torch.Tensor(resized_images.astype("float32"))
         # normalized_images = (resized_images - torch.min(resized_images, )) / (torch.max(resized_images) - torch.min(resized_images))
-        if normalize:
-            normalized_images = (resized_images - channel_min(resized_images)) / (channel_max(resized_images) - channel_min(resized_images))
-        else:
-            normalized_images = resized_images
+        # if normalize:
+        #     normalized_images = (resized_images - channel_min(resized_images)) / (channel_max(resized_images) - channel_min(resized_images))
+        # else:
+        #     normalized_images = resized_images
 
-        torch.save(normalized_images, seg_image_path.parent / "images.pt")
+        # torch.save(normalized_images, seg_image_path.parent / "images.pt")
+        torch.save(resized_images, seg_image_path.parent / "images.pt")
         final_image_paths.append(seg_image_path.parent / "images.pt")
         torch.save(torch.Tensor(resized_cell_masks), seg_cell_mask_path.parent / "cell_masks.pt")
         final_cell_mask_paths.append(seg_cell_mask_path.parent / "cell_masks.pt")
