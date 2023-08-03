@@ -20,14 +20,22 @@ import numpy as np
 utils.silent = True
 pipeline.suppress_warnings = True
 
-stats_opt = ['norm', 'pix_range', 'int_img', 'sample']
-NORM, PIX_RANGE, INT_IMG, SAMPLE = 0, 1, 2, 3
+stats_opt = ['norm', 'pix_range', 'int_img', 'sample', 'sharp']
+stats_opt_desc = {
+    'norm': 'Normalize images and show results and statistics',
+    'pix_range': 'Show pixel range statistics, esp percentile intensities per channel',
+    'int_img': 'Show image level intensity statistics',
+    'sample': 'Show sample images from final dataset',
+    'sharp': 'Show sharpness statistics'
+}
+stats_desc = '\n'.join([f"{opt}: {stats_opt_desc[opt]};" for opt in stats_opt])
+NORM, PIX_RANGE, INT_IMG, SAMPLE, SHARP = 0, 1, 2, 3, 4
 
 parser = argparse.ArgumentParser(description='Dataset preprocessing pipline')
 parser.add_argument('--data_dir', type=str, help='Path to dataset, should be absolute path', required=True)
 parser.add_argument('--output_dir', type=str , help='Path to output directory, should be absolute path')
 parser.add_argument('--name', type=str, help='Name of dataset', required=True)
-parser.add_argument('--stats', type=str, help=f"Image stats to show, options include: {stats_opt}", choices=stats_opt)
+parser.add_argument('--stats', type=str, help=f"Image stats to show, options include: {stats_opt}\n{stats_desc}", choices=stats_opt)
 parser.add_argument('--viz_num', type=int, default=5, help='Number of samples to show')
 parser.add_argument('--calc_num', type=int, default=30, help='Number of samples to use for calculating image stats')
 parser.add_argument('--all', action='store_true', help='Run all steps')
@@ -100,6 +108,24 @@ if args.stats is not None:
             cell_file = DATASET_IMG.with_name(f"{DATASET_IMG.stem}_{i}{DATASET_IMG.suffix}")
             save_image(image, img_file, cmaps=dataset_config.cmaps)
             save_image_grid(cell_images, cell_file, nrow=5, cmaps=dataset_config.cmaps)
+    if args.stats == stats_opt[SHARP]:
+        from kornia.filters import Laplacian
+        assert NAME_INDEX.exists(), "Index files do not exist, run pipeline with at least until --single_cell"
+        dataset_image_paths, _, _ = load_index_paths(NAME_INDEX)
+        dataset_image_paths = dataset_image_paths[:args.calc_num]
+        dataset_images = torch.cat([torch.load(p) for p in dataset_image_paths])
+        laplacian = Laplacian(3)
+        laplacian_images = laplacian(dataset_images)
+        # image_sharpness = laplacian_images.mean(dim=(1,2,3))
+        # image_sharpness = laplacian_images.sum(dim=(1,2,3))
+        image_sharpness = laplacian_images.std(dim=(1,2,3))
+        print(image_sharpness.shape)
+        import seaborn as sns
+        import matplotlib.pyplot as plt
+        sns.histplot(image_sharpness.cpu().numpy(), bins=20)
+        plt.savefig(OUTPUT_DIR / "sharpness.png")
+
+
 
 
 if args.image_mask_cache or args.all:
