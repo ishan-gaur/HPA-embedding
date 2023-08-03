@@ -1,3 +1,4 @@
+from pathlib import Path
 import torch    
 from torch.utils.data import Dataset, TensorDataset
 from microfilm.microplot import microshow
@@ -10,11 +11,12 @@ from glob import glob
 
 class CellImageDataset(Dataset):
     # images are C x H x W
-    def __init__(self, data_dir):
+    def __init__(self, index_file, channel_colors=None):
+        data_dir = Path(index_file).parent
         self.data_dir = data_dir
         self.channel_names = load_channel_names(data_dir)
-        self.images = torch.concat(load_dir_images(data_dir))
-        self.channel_colors = None
+        self.images = torch.concat(load_dir_images(index_file))
+        self.channel_colors = channel_colors
     
     def __len__(self):
         return len(self.images)
@@ -57,10 +59,10 @@ class CellImageDataset(Dataset):
 
     def as_rgb(self, channel_colors=None, num_workers=1):
         if self.channel_colors is None:
-            if channel_colors is None:
-                self.__set_default_channel_colors__()
-            else:
+            if channel_colors is not None:
                 self.channel_colors = channel_colors
+            else:
+                self.__set_default_channel_colors__()
         device = self.images.device
         self.images.cpu()
         rgb_images = []

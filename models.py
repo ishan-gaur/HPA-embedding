@@ -10,6 +10,7 @@ class Classifier(nn.Module):
         d_hidden: int = 256,
         d_output: int = 3,
     ):
+        super().__init__()
         self.model = nn.Sequential(
             nn.Linear(d_input, d_hidden),
             nn.GELU(),
@@ -27,9 +28,10 @@ class DINO(nn.Module):
     PATCH_SIZE = 14
     CLS_DIM = 1024
     def __init__(self,
-        imsize: Tuple[int, int] = 256,
+        imsize: Tuple[int, int] = (256, 256),
         margin_tolerance: int = -1,
     ):
+        super().__init__()
         self.dinov2 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
         self.crop_slices = DINO.__get_crop_slices(imsize, margin_tolerance, DINO.PATCH_SIZE)
 
@@ -42,6 +44,7 @@ class DINO(nn.Module):
         for image_size in imsize:
             closest_multiple = math.floor(image_size / dino_patch_size)
             margin_size = image_size - closest_multiple * dino_patch_size
+            print(f"Margin cropped out to fit DINO patches: {margin_size}")
             if margin_tolerance >= 0:
                 assert margin_size <= margin_tolerance, f"Error in creating the crop slices for use with the DINO model. Margin size is {margin_size} but margin tolerance is {margin_tolerance}."
             crop_slice = slice(margin_size // 2, image_size - margin_size // 2)
@@ -60,6 +63,9 @@ class DINOClassifier(lightning.LightningModule):
         margin_tolerance: int = -1,
         lr: float = 1e-4,
     ):
+        super().__init__()
+        self.save_hyperparameters()
+
         self.dino = DINO(imsize=imsize, margin_tolerance=margin_tolerance)
         self.classifier = Classifier(d_input=DINO.CLS_DIM, d_output=d_output)
         self.imsize = imsize

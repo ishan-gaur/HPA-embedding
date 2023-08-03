@@ -82,16 +82,18 @@ def cdf_percentiles(percentiles, values, channel_names, file_path, log=False):
         new_file_path = file_path.parent / (f'{file_path.stem}_{percentile}' + file_path.suffix)
         end_plot(new_file_path)
 
+def save_image(image, file_path, cmaps):
+    img = image.float()
+    print("Converting to RGB")
+    img, _, _, _ = multichannel_to_rgb(img.cpu().numpy(), cmaps=cmaps)
+    img = Image.fromarray((255 * img[..., :3]).astype(np.uint8))
+    img.save(file_path)
+    print(f"Saved image samples to {file_path}")
+
 def save_image_grid(images, file_path, nrow, cmaps):
     images = images.float()
     grid = make_grid(images, nrow=nrow, normalize=True, value_range=(0, 1))
-    print("Converting to RGB")
-    # grid, _, _, _ = multichannel_to_rgb(grid.cpu().numpy(), cmaps=cmaps, proj_type="alpha")
-    grid, _, _, _ = multichannel_to_rgb(grid.cpu().numpy(), cmaps=cmaps)
-    img = Image.fromarray((255 * grid[..., :3]).astype(np.uint8))
-    img.save(file_path)
-    print(f"Saved image samples to {file_path}")
-    return 0
+    save_image(grid, file_path, cmaps)
 
 def color_image_by_intensity(images, file_path):
     # make a grid where the top row is the original image

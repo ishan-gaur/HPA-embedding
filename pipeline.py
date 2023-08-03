@@ -13,8 +13,6 @@ import numpy as np
 import cv2
 from scipy import ndimage
 from microfilm.microplot import microshow
-import hpacellseg.cellsegmentator as cellsegmentator
-from hpacellseg.utils import label_cell
 from skimage import measure, segmentation, morphology
 from utils import min_max_normalization
 
@@ -78,6 +76,7 @@ def segmentator_setup(multi_channel_model, device):
         return _segmentator_setup(multi_channel_model, device)
 
 def _segmentator_setup(multi_channel_model, device):
+    import hpacellseg.cellsegmentator as cellsegmentator
     pwd = Path(os.getcwd())
     NUC_MODEL = pwd / "HPA-Cell-Segmentation" / "nuclei-model.pth"
     CELL_MODEL = pwd / "HPA-Cell-Segmentation" / "cell-model.pth"
@@ -160,6 +159,7 @@ def _get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge
     """
     Get the masks for the images in image_paths using HPA-Cell-Segmentation
     """
+    from hpacellseg.utils import label_cell
     images_paths = []
     nuclei_mask_paths = []
     cell_mask_paths = []
@@ -561,11 +561,13 @@ def load_index_paths(index_file):
         nuclei_mask_paths.append(Path(sample_path["nuclei_mask_path"]))
     return image_paths, cell_mask_paths, nuclei_mask_paths
 
-def load_dir_images(data_dir):
-    sample_paths = load_data_path_index(data_dir)
+def load_dir_images(index_file, num_load=None):
+    image_paths, _, _ = load_index_paths(index_file)
+    if num_load is not None:
+        image_paths = image_paths[:num_load]
     images = []
-    for sample_path in tqdm(sample_paths, desc="Loading images"):
-        images.append(torch.load(Path(sample_path["image_path"])))
+    for image_path in tqdm(image_paths, desc="Loading images"):
+        images.append(torch.load(Path(image_path)))
     return images
 
 def normalize_images(image_paths, norm_strategy, norm_suffix=None, batch_size=100):

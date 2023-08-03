@@ -44,7 +44,7 @@ rm_border
 remove_size: remove cells whose bounding box area is smaller than this value (integer)
 """
 rm_border = False
-remove_size = 10000
+remove_size = 1000
 
 """
 Single Cell Data Creation (Cropping and Resizing)
