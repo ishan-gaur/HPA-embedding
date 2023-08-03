@@ -23,7 +23,7 @@ def pixel_range_info(args, image_paths, CHANNELS, OUTPUT_DIR):
         # histplot_percentiles(image_percentiles, image_values, CHANNELS, OUTPUT_DIR / 'image_percentiles.png')
         cdf_percentiles(image_percentiles, image_values, CHANNELS, OUTPUT_DIR / 'image_percentiles_cdf.png')
         
-def normalization_dry_run(args, config, image_paths, CHANNELS, OUTPUT_DIR, device):
+def normalization_dry_run(args, config, image_paths, CHANNELS, OUTPUT_DIR, device, plot_channel=None):
     image_sample_paths = np.random.choice(image_paths, args.calc_num)
     image_sample = composite_images_from_paths(image_sample_paths, CHANNELS)
 
@@ -72,10 +72,23 @@ def normalization_dry_run(args, config, image_paths, CHANNELS, OUTPUT_DIR, devic
     norm_images = torch.from_numpy(norm_images[:args.viz_num]).to(device)
     images = torch.cat([image_sample, norm_images], dim=0)
     print(images.shape)
-    save_image_grid(images[:, 2:], norm_image_file, args.viz_num, config.cmaps[2:])
+    if channel_slice is None:
+        channel_slice = slice(0, len(CHANNELS))
+    save_image_grid(images[:, channel_slice], norm_image_file, args.viz_num, config.cmaps[channel_slice])
 
 def image_by_level_set(args, image_paths, CHANNELS, OUTPUT_DIR):
     image_sample_paths = np.random.choice(image_paths, args.viz_num)
     image_sample = composite_images_from_paths(image_sample_paths, CHANNELS)
     image_sample = rescale_normalization(image_sample, stats=False)
     color_image_by_intensity(image_sample, OUTPUT_DIR / 'intensity_colored_images.png')
+
+def sample_sharpness(images, kernel_size=3):
+    from kornia.filters import laplacian, sobel
+    # laplacian = Laplacian(3)
+    # image_sharpness = laplacian_images.mean(dim=(1,2,3))
+    # image_sharpness = laplacian_images.sum(dim=(1,2,3))
+    # laplacian_images = laplacian(images, kernel_size=kernel_size)
+    # image_sharpness = laplacian_images.std(dim=(1,2,3))
+    image_sharpness = sobel(images)
+    image_sharpness = image_sharpness.std(dim=(1,2,3))
+    return image_sharpness

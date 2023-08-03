@@ -16,7 +16,7 @@
             "name": "CLI: norm visualization",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/pipeline_cli.py",
+            "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
                 "--data_dir", "/data/ishang/FUCCI-dataset/",
@@ -28,7 +28,7 @@
             "name": "CLI: pixel percentile visualization",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/pipeline_cli.py",
+            "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
                 "--data_dir", "/data/ishang/FUCCI-dataset/",
@@ -41,7 +41,7 @@
             "name": "CLI: image intensities visualization",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/pipeline_cli.py",
+            "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
                 "--data_dir", "/data/ishang/FUCCI-dataset/",
