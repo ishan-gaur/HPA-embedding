@@ -1,9 +1,11 @@
 import os
 import csv
 import subprocess
-from tqdm import tqdm
-from glob import glob
 from pathlib import Path 
+from glob import glob
+from packaging import version
+import warnings
+from tqdm import tqdm
 
 import torch
 import numpy as np
@@ -12,10 +14,13 @@ import cv2
 from scipy import ndimage
 from microfilm.microplot import microshow
 import hpacellseg.cellsegmentator as cellsegmentator
-from hpacellseg.utils import label_cell, label_nuclei
-from skimage import measure, segmentation, morphology, transform
+from hpacellseg.utils import label_cell
+from skimage import measure, segmentation, morphology
+from utils import min_max_normalization
 
 import matplotlib.pyplot as plt
+
+suppress_warnings = False
 
 def has_channel_names(data_dir):
     return os.path.exists(data_dir / "channel_names.txt")
@@ -61,6 +66,18 @@ def image_paths_from_folders(folders_file):
     return image_paths
 
 def segmentator_setup(multi_channel_model, device):
+    if version.parse(torch.__version__) >= version.parse("1.10.0"):
+        raise ValueError(f"HPA Cell Segmentator is not compatible with torch >= 1.10.0.\nTorch {torch.__version__} detected. Are you using the 'data-prep' conda environment?")
+    if version.parse(np.__version__) >= version.parse("1.20.0"):
+        raise ValueError(f"HPA Cell Segmentator is not compatible with torch >= 1.10.0.\nTorch {torch.__version__} detected. Are you using the 'data-prep' conda environment?")
+    if suppress_warnings:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return _segmentator_setup(multi_channel_model, device)
+    else:
+        return _segmentator_setup(multi_channel_model, device)
+
+def _segmentator_setup(multi_channel_model, device):
     pwd = Path(os.getcwd())
     NUC_MODEL = pwd / "HPA-Cell-Segmentation" / "nuclei-model.pth"
     CELL_MODEL = pwd / "HPA-Cell-Segmentation" / "cell-model.pth"
@@ -127,8 +144,19 @@ def composite_images_from_paths(image_paths, channel_names):
     path_images = np.concatenate(path_images)
     return path_images
 
-
 def get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge_missing=True, rebuild=False, display=False):
+    if version.parse(torch.__version__) >= version.parse("1.10.0"):
+        raise ValueError(f"HPA Cell Segmentator is not compatible with torch >= 1.10.0.\nTorch {torch.__version__} detected. Are you using the 'data-prep' conda environment?")
+    if version.parse(np.__version__) >= version.parse("1.20.0"):
+        raise ValueError(f"HPA Cell Segmentator is not compatible with torch >= 1.10.0.\nTorch {torch.__version__} detected. Are you using the 'data-prep' conda environment?")
+    if suppress_warnings:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return _get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge_missing, rebuild, display)
+    else:
+        return _get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge_missing, rebuild, display)
+
+def _get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge_missing=True, rebuild=False, display=False):
     """
     Get the masks for the images in image_paths using HPA-Cell-Segmentation
     """
@@ -511,8 +539,8 @@ def create_data_path_index(image_paths, cell_mask_paths, nuclei_mask_paths, inde
         for sample_path in sample_paths:
             writer.writerow(sample_path)
 
-def load_data_path_index(data_dir):
-    index_file = data_dir / "index.csv"
+def load_data_path_index(data_dir, file_name="index.csv"):
+    index_file = data_dir / file_name
     if not index_file.exists():
         raise ValueError(f"Index file {index_file} does not exist")
     with open(index_file, "r") as f:
@@ -522,9 +550,41 @@ def load_data_path_index(data_dir):
             sample_paths.append(row)
     return sample_paths
 
+def load_index_paths(index_file):
+    data_dir = Path(index_file).parent
+    file_name = Path(index_file).name
+    sample_paths = load_data_path_index(data_dir, file_name)
+    image_paths, cell_mask_paths, nuclei_mask_paths = [], [], []
+    for sample_path in sample_paths:
+        image_paths.append(Path(sample_path["image_path"]))
+        cell_mask_paths.append(Path(sample_path["cell_mask_path"]))
+        nuclei_mask_paths.append(Path(sample_path["nuclei_mask_path"]))
+    return image_paths, cell_mask_paths, nuclei_mask_paths
+
 def load_dir_images(data_dir):
     sample_paths = load_data_path_index(data_dir)
     images = []
     for sample_path in tqdm(sample_paths, desc="Loading images"):
         images.append(torch.load(Path(sample_path["image_path"])))
     return images
+
+def normalize_images(image_paths, norm_strategy, norm_suffix=None, batch_size=100):
+    paths = []
+    for i in tqdm(range(0, len(image_paths), batch_size), desc="Normalizing images"):
+        batch_paths = image_paths[i:min(i+batch_size, len(image_paths))]
+        images = []
+        for path in batch_paths:
+            images.append(np.load(path))
+        images = np.concatenate(images, axis=0)
+
+        if norm_strategy == "min_max":
+            images = min_max_normalization(images, stats=False)
+        else:
+            raise NotImplementedError(f"Normalization strategy {norm_strategy} not implemented in CLI")
+
+        for j, path in enumerate(batch_paths):
+            if norm_suffix is not None:
+                path = path.parent / (f"{path.stem}_{norm_suffix}" + path.suffix)
+            np.save(path, images[j])
+            paths.append(path)
+    return paths

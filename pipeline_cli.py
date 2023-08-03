@@ -1,31 +1,36 @@
+import inspect
 import argparse
 import config
 from pathlib import Path
 
-from pipeline import create_image_paths_file, image_paths_from_folders, create_data_path_index, load_channel_names, save_channel_names
-from pipeline import composite_images_from_paths
-from pipeline import segmentator_setup, get_masks, clean_and_save_masks, crop_images, resize_and_normalize
-from data_viz import plot_intensities, barplot_percentiles, histplot_percentiles, cdf_percentiles
-from data_viz import save_image_grid, color_image_by_intensity
-from utils import min_max_normalization, rescale_normalization, threshold_normalization, percentile_normalization
-from utils import get_dataset_percentiles, get_image_percentiles
-
+import utils
+import pipeline
+from pipeline import create_image_paths_file, image_paths_from_folders, create_data_path_index, load_index_paths, load_channel_names, save_channel_names
+from pipeline import segmentator_setup, get_masks, normalize_images, clean_and_save_masks, crop_images, resize
+from stats import pixel_range_info, normalization_dry_run, image_by_level_set
 
 import torch
 import numpy as np
 
+utils.silent = True
+pipeline.suppress_warnings = True
+
+stats_opt = ['norm', 'pix_range', 'int_img']
+
 parser = argparse.ArgumentParser(description='Dataset preprocessing pipline')
 parser.add_argument('--data_dir', type=str, help='Path to dataset, should be absolute path', required=True)
 parser.add_argument('--output_dir', type=str , help='Path to output directory, should be absolute path')
-NORM, PIX_RANGE, INT_IMG = 0, 1, 2
-stats_opt = ['norm', 'pix_range', 'int_img']
+parser.add_argument('--name', type=str, help='Name of dataset')
 parser.add_argument('--stats', type=str, help=f"Image stats to show, options include: {stats_opt}", choices=stats_opt)
-parser.add_argument('--viznum', type=int, default=5, help='Number of samples to show')
-parser.add_argument('--calcnum', type=int, default=30, help='Number of samples to use for calculating image stats')
-# parser.add_argument('--images', action='store_true', help='Save images')
+parser.add_argument('--viz_num', type=int, default=5, help='Number of samples to show')
+parser.add_argument('--calc_num', type=int, default=30, help='Number of samples to use for calculating image stats')
+parser.add_argument('--all', action='store_true', help='Run all steps')
+parser.add_argument('--image_mask_cache', action='store_true', help='Save images')
+parser.add_argument('--normalize', action='store_true', help='Normalize images')
+parser.add_argument('--clean_masks', action='store_true', help='Clean masks: remove small objects and join cells without nuclei, etc.')
+parser.add_argument('--single_cell', action='store_true', help='Crop and save single cell images')
 parser.add_argument('--device', type=int, default=7, help='GPU device number')
-parser.add_argument('--config', type=str, default='config.py', help='Path to config file')
-
+parser.add_argument('--rebuild', action='store_true', help='Rebuild specifed steps even if files exist')
 
 args = parser.parse_args()
 
@@ -35,85 +40,72 @@ if not OUTPUT_DIR.exists():
     OUTPUT_DIR.mkdir(parents=True)
     print(f"Created output directory {OUTPUT_DIR}")
 
-data_paths_file, num_paths = create_image_paths_file(DATA_DIR)
-image_paths = image_paths_from_folders(data_paths_file)
+BASE_INDEX = DATA_DIR / "index.csv"
+NORM_SUFFIX = f"_{config.norm_strategy}{f'_{config.norm_min}_{config.norm_max}' if config.norm_strategy in ['threshold', 'percentile'] else ''}"
+NORM_INDEX = DATA_DIR / f"index{NORM_SUFFIX}.csv"
+NAME_INDEX = DATA_DIR / f"index_{args.name}.csv"
+
+NORM, PIX_RANGE, INT_IMG = 0, 1, 2
 
 CHANNELS = load_channel_names(DATA_DIR) if config.channels is None else config.channels
 if config.channels is None:
     save_channel_names(DATA_DIR, CHANNELS)
+DAPI, TUBL, CALB2 = config.dapi, config.tubl, config.calb2
 
 device = f"cuda:{args.device}" if torch.cuda.is_available() else "cpu"
+print(f"Using device {device}")
+
 
 if args.stats is not None:
+    data_paths_file, num_paths = create_image_paths_file(DATA_DIR)
+    image_paths = image_paths_from_folders(data_paths_file)
     if args.stats == stats_opt[PIX_RANGE]:
-        # if args.calcnum < 500:
-        #     print("Warning: using less than 500 images to calculate pixel range may result in inaccurate pixel range")
-        image_sample_paths = np.random.choice(image_paths, args.calcnum)
-        image_sample = composite_images_from_paths(image_sample_paths, CHANNELS)
+        pixel_range_info(args, image_paths, CHANNELS, OUTPUT_DIR)
+    if args.stats == stats_opt[NORM]:
+        normalization_dry_run(args, config, image_paths, CHANNELS, OUTPUT_DIR, device)
+    if args.stats == stats_opt[INT_IMG]:
+        image_by_level_set(args, image_paths, CHANNELS, OUTPUT_DIR)
 
-        values, percentiles = get_dataset_percentiles(image_sample, non_zero=False)
-        thresholded_values, thresholded_percentiles = get_dataset_percentiles(image_sample)
+if args.image_mask_cache or args.all:
+    print("Caching composite images and getting segmentation masks")
+    data_paths_file, num_paths = create_image_paths_file(DATA_DIR)
+    image_paths = image_paths_from_folders(data_paths_file)
+    if BASE_INDEX.exists() and not args.rebuild:
+        print("Index file already exists, skipping. Set --rebuild to overwrite.")
+    multi_channel_model = True if CALB2 is not None else False
+    segmentator = segmentator_setup(multi_channel_model, device)
+    image_paths, nuclei_mask_paths, cell_mask_paths = get_masks(segmentator, image_paths, CHANNELS, DAPI, TUBL, CALB2, rebuild=args.rebuild)
+    create_data_path_index(image_paths, cell_mask_paths, nuclei_mask_paths, BASE_INDEX, overwrite=True)
 
-        barplot_percentiles(percentiles, values, CHANNELS, OUTPUT_DIR / 'pixel_percentiles.png')
-        barplot_percentiles(thresholded_percentiles, thresholded_values, CHANNELS, OUTPUT_DIR / 'pixel_percentiles_non_zero.png')
+if args.normalize or args.all:
+    print("Normalizing images")
+    if NORM_INDEX.exists() and not args.rebuild:
+        print("Index file already exists, skipping. Set --rebuild to overwrite.")
+    assert BASE_INDEX.exists(), "Index file does not exist, run --image_mask_cache first"
+    assert config.norm_strategy is not None, "Normalization strategy not set in config"
+    image_paths, _, _ = load_index_paths(BASE_INDEX)
+    norm_paths = normalize_images(image_paths, config.norm_strategy, NORM_SUFFIX)
+    create_data_path_index(norm_paths, cell_mask_paths, nuclei_mask_paths, NORM_INDEX, overwrite=True)
 
-        image_values, image_percentiles = get_image_percentiles(image_sample)
-        # histplot_percentiles(image_percentiles, image_values, CHANNELS, OUTPUT_DIR / 'image_percentiles.png')
-        cdf_percentiles(image_percentiles, image_values, CHANNELS, OUTPUT_DIR / 'image_percentiles_cdf.png')
-        
-if args.stats == stats_opt[NORM]:
-        image_sample_paths = np.random.choice(image_paths, args.calcnum)
-        image_sample = composite_images_from_paths(image_sample_paths, CHANNELS)
+if args.clean_masks or args.all:
+    print("Cleaning masks")
+    assert BASE_INDEX.exists(), "Index file does not exist, run --image_mask_cache first"
+    num_original, num_removed = clean_and_save_masks(cell_mask_paths, nuclei_mask_paths, rm_border=config.rm_border, remove_size=config.remove_size)
+    print("Fraction removed:", num_removed / num_original)
+    print("Total cells removed:", num_removed)
+    print("Total cells remaining:", num_original - num_removed)
 
-        if config.norm_strategy == 'min_max':
-            norm_images, mins, maxes, intensities = min_max_normalization(image_sample)
-        if config.norm_strategy == 'rescale':
-            norm_images, mins, maxes, intensities = rescale_normalization(image_sample)
-        if config.norm_strategy == 'threshold':
-            assert config.norm_min is not None and config.norm_max is not None, "Must specify norm_min and norm_max in config for threshold normalization"
-            norm_images, mins, maxes, intensities = threshold_normalization(image_sample, config.norm_min, config.norm_max)
-        if config.norm_strategy == 'percentile':
-            assert config.norm_min is not None and config.norm_max is not None, "Must specify norm_min and norm_max in config for percentile normalization"
-            norm_images, mins, maxes, intensities = percentile_normalization(image_sample, config.norm_min, config.norm_max)
+if args.single_cell or args.all:
+    print("Cropping single cell images")
+    assert NORM_INDEX.exists(), "Index file for normalized images does not exist, run --normalize first"
+    image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(NORM_INDEX)
+    seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths = crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, config.cutoff, config.nuc_margin)
+    final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths = resize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths, config.output_image_size)
+    create_data_path_index(final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths, NAME_INDEX, overwrite=True)
 
-        if config.norm_strategy == 'threshold':
-            strategy = f"{config.norm_strategy}_{config.norm_min}_{config.norm_max}"
-        elif config.norm_strategy == 'percentile':
-            strategy = f"{config.norm_strategy}_{config.norm_min}_{config.norm_max}"
-        else:
-            strategy = config.norm_strategy 
-            
-        intensity_hist_file = OUTPUT_DIR / 'image_intensity_histogram.png'
-        print("Plotting image intensity histogram")
-        plot_intensities(intensities, CHANNELS, intensity_hist_file, log=True)
-        print(f"Saved image intensity histogram to {intensity_hist_file}")
-
-        norm_intensities = norm_images.transpose(1, 0, 2, 3).reshape(len(CHANNELS), -1)
-        norm_intensity_hist_file = OUTPUT_DIR / f'norm_{strategy}_image_intensity_histogram.png'
-        print("Plotting normalized image intensity histogram")
-        plot_intensities(norm_intensities, CHANNELS, norm_intensity_hist_file, log=True)
-        print(f"Saved normalized image intensity histogram to {norm_intensity_hist_file}")
-
-        mins, maxes = mins.squeeze(), maxes.squeeze()
-        # print the 0, 25, 50, 75, 100 percentiles
-        for channel in range(len(CHANNELS)):
-            print(f"Channel {CHANNELS[channel]}")
-            print("\tImage min and max percentiles:")
-            print(f"\t{np.percentile(mins[channel], [0, 25, 50, 75, 100])}")
-            print(f"\t{np.percentile(maxes[channel], [0, 25, 50, 75, 100])}")
-
-        # save a grid of images before and after
-        print("Saving image samples")
-        norm_image_file = OUTPUT_DIR / f'normalized_images_{strategy}.png'
-        image_sample = rescale_normalization(image_sample[:args.viznum], stats=False)
-        image_sample = torch.from_numpy(image_sample).to(device)
-        norm_images = torch.from_numpy(norm_images[:args.viznum]).to(device)
-        images = torch.cat([image_sample, norm_images], dim=0)
-        print(images.shape)
-        save_image_grid(images[:, 2:], norm_image_file, args.viznum, config.cmaps[2:])
-
-if args.stats == stats_opt[INT_IMG]:
-    image_sample_paths = np.random.choice(image_paths, args.viznum)
-    image_sample = composite_images_from_paths(image_sample_paths, CHANNELS)
-    image_sample = rescale_normalization(image_sample, stats=False)
-    color_image_by_intensity(image_sample, OUTPUT_DIR / 'intensity_colored_images.png')
+    # save the source of the config module to the data directory with name args.name + '.py'
+    # this will allow us to reproduce the results later
+    with open(DATA_DIR / f"{args.name}.py", "w") as f:
+        f.write("\n\n# Source of config module:\n")
+        f.write(f"\n\n# Using normalized images from {NORM_INDEX}:\n")
+        f.write(inspect.getsource(config))
