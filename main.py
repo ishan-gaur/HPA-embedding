@@ -7,6 +7,13 @@ from pipeline import segmentator_setup, get_masks, clean_and_save_masks, crop_im
 from utils import min_max_normalization
 utils.silent = True
 
+# cache paths are written at the mask stage: images and masks as np
+# image paths are OVERwritten at the normalizing stage: images as np
+# mask paths are OVERwritten at the cleaning stage: masks as np
+# cache paths are written at the cropping stage: segmented images and masks as np
+# cache paths are written at the resizing stage: images and masks as pt
+# these final paths are written to the index file and saved with the channel names
+
 # DATA_DIR = Path("/data/ishang/CCNB1-dataset/") # NEEDS TO BE ABSOLUTE PATH
 # DATA_DIR = Path("/home/ishang/HPA-embedding/dev-dataset-CCNB1/")
 # CHANNEL_NAMES = ["nuclei", "microtubule", "cyclinb1"]
