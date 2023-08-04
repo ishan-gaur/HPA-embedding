@@ -61,5 +61,5 @@ output_image_size = 512
 Sharpness Filtering
 sharpness_threshold: threshold for sharpness filtering (float); if None, no filtering is done
 """
-# sharpness_threshold = 0.008
-sharpness_threshold = None
+sharpness_threshold = 0.008
+# sharpness_threshold = None

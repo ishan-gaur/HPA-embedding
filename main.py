@@ -15,6 +15,7 @@ from data import CellImageDataset, SimpleDataset
 
 import torch
 import numpy as np
+from torch.utils.data import DataLoader
 
 utils.silent = True
 pipeline.suppress_warnings = True
@@ -124,7 +125,7 @@ if args.stats is not None:
 
 if args.image_mask_cache or args.all:
     print("Caching composite images and getting segmentation masks")
-    data_paths_file, num_paths = create_image_paths_file(DATA_DIR)
+    data_paths_file, num_paths = create_image_paths_file(DATA_DIR, overwrite=args.rebuild)
     image_paths = image_paths_from_folders(data_paths_file)
     if BASE_INDEX.exists() and not args.rebuild:
         print("Index file already exists, skipping. Set --rebuild to overwrite.")
@@ -183,7 +184,7 @@ if args.single_cell or args.all:
 if args.rgb or args.all:
     assert not no_name, "Name of dataset must be specified"
     assert dataset_config is not None, "Dataset config file must be specified via name, this means that the config for this data doesn't exist or doesn't make the provided name"
-    if RGB_DATASET.exists() and not args.rebuild:
+    if SimpleDataset.has_cache_files(RGB_DATASET) and not args.rebuild:
         print("RGB images file already exists, skipping. Set --rebuild to overwrite.")
     else:
         print("Creating RGB images")
@@ -206,10 +207,17 @@ if args.dino_cls:
             dataset_config.output_image_size = (dataset_config.output_image_size, dataset_config.output_image_size)
         dino = DINO(imsize=dataset_config.output_image_size).to(device)
         dataset = SimpleDataset(path=RGB_DATASET)
+        dataloader = DataLoader(dataset, batch_size=args.batch_size, num_workers=1, shuffle=False)
+
         embeddings = []
-        for i in tqdm(range(0, len(dataset), args.batch_size)):
-            batch_embedding = dino(dataset[i:min(i+args.batch_size, len(dataset))].to(device))
-            embeddings.append(batch_embedding)
+        with torch.no_grad():
+            for batch in tqdm(iter(dataloader), desc="Embedding images with DINOv2"):
+                batch = batch.to(device)
+                batch_embedding = dino(batch).cpu()
+                embeddings.append(batch_embedding)
         embeddings = torch.cat(embeddings)
+
         torch.save(embeddings, EMBEDDINGS_DATASET)
         print(embeddings.shape)
+
+
