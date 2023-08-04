@@ -3,6 +3,13 @@ import torch
 import torch.nn as nn
 import lightning.pytorch as lightning
 from typing import Tuple
+import pickle
+from pathlib import Path
+from data import CellImageDataset
+from torch.utils.data import DataLoader
+from sklearn.mixture import GaussianMixture
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 class Classifier(nn.Module):
     def __init__(self,
@@ -95,3 +102,35 @@ class DINOClassifier(lightning.LightningModule):
     
     def configure_optimizers(self):
         return torch.optim.Adam(self.classifier.parameters(), lr=self.lr)
+
+
+class CellCycleGMM:
+    def __init__(self, index_file, n_components=3):
+        self.index_file = index_file
+        self.n_components = n_components
+        if self.index_file.exists() and CellCycleGMM.__gmm_pickle_path(self.index_file).exists():
+            print("Loading GMM from pickle file at " + str(CellCycleGMM.__gmm_pickle_path(self.index_file)))
+            self.gmm = pickle.load(open(CellCycleGMM.__gmm_pickle_path(self.index_file), "rb"))
+        else:
+            print("Fitting GMM to data since no pickle file was found at " + str(CellCycleGMM.__gmm_pickle_path(self.index_file)))
+            dataset = CellImageDataset(index_file)
+            self.gmm = GaussianMixture(n_components=self.n_components)
+            self.gmm.fit(dataset[:])
+            pickle.dump(self.gmm, open(CellCycleGMM.__gmm_pickle_path(self.index_file), "wb"))
+            print("Saved GMM to pickle file at " + str(CellCycleGMM.__gmm_pickle_path(self.index_file)))
+
+    def __gmm_pickle_path(index_file):
+        name = "gmm_" + "_".join(index_file.stem.split("_")[1:]) + ".pkl"
+        return index_file.parent / name
+
+    def predict(self, x):
+        return self.gmm.predict(x)
+
+    def predict_proba(self, x):
+        return self.gmm.predict_proba(x)
+    
+    def plot_predictions(self, x):
+        sns.kdeplot(x[:, 0], x[:, 1], hue=self.predict(x), color_palette="Set2")
+
+    def plot_probabilities(self, x):
+        plt.scatter(x[:, 0], x[:, 1], c=self.predict_proba(x))
