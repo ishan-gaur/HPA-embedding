@@ -11,10 +11,8 @@ from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.strategies import DDPStrategy
 
 from FUCCIDataset import FUCCIDatasetInMemory
-from LightningModules import CrossModalDataModule, CrossModalAutoencoder
-from Metrics import ReconstructionVisualization, EmbeddingLogger
-from data import CellImageDataset
-from classifier import DINOClassifier
+from models import Classifier
+from data import SimpleDataset
 
 
 ##########################################################################################
@@ -28,7 +26,7 @@ parser = argparse.ArgumentParser(description="Train a model to align the FUCCI d
                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("-d", "--data", required=True, help="path to dataset")
 parser.add_argument("-e", "--epochs", type=int, default=100, help="maximum number of epochs to train for")
-parser.add_argument("-c", "--checkpoint", help="path to checkpoint to load from")
+# parser.add_argument("-c", "--checkpoint", help="path to checkpoint to load from")
 parser.add_argument("-n", "--name", default=time.strftime('%Y_%m_%d_%H_%M'), help="Name to help lookup logging directory")
 
 args = parser.parse_args()
@@ -41,11 +39,9 @@ if args.checkpoint is not None:
 # Experiment parameters and logging
 ##########################################################################################
 config = {
-    "imsize": 256,
-    "nf": 128,
     "batch_size": 8,
-    # "devices": [4],
-    "devices": list(range(4, torch.cuda.device_count())),
+    "devices": [6],
+    # "devices": list(range(4, torch.cuda.device_count())),
     # "devices": list(range(0, torch.cuda.device_count())),
     "num_workers": 1,
     # "num_workers": 4,
@@ -61,7 +57,7 @@ def print_with_time(msg):
     print(f"[{time.strftime('%m/%d/%Y @ %H:%M')}] {msg}")
 
 fucci_path = Path(args.data)
-project_name = f"FUCCI_cross_VAE"
+project_name = f"FUCCI_dino_classifier"
 log_folder = Path(f"/data/ishang/fucci_vae/{project_name}_{args.name}")
 if not log_folder.exists():
     os.makedirs(log_folder, exist_ok=True)
