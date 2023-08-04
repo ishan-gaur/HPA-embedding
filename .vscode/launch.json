@@ -13,6 +13,18 @@
             "justMyCode": true
         },
         {
+            "name": "DEBUG: norm visualization",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--data_dir", "dev-dataset-FUCCI",
+                "--stats", "norm",
+                "--calc_num", "20"
+            ],
+        },
+        {
             "name": "CLI: norm visualization",
             "type": "python",
             "request": "launch",
@@ -21,7 +33,7 @@
             "args": [
                 "--data_dir", "/data/ishang/FUCCI-dataset/",
                 "--stats", "norm",
-                "--calcnum", "20"
+                "--calc_num", "20"
             ],
         },
         {
@@ -33,8 +45,8 @@
             "args": [
                 "--data_dir", "/data/ishang/FUCCI-dataset/",
                 "--stats", "pix_range",
-                // "--calcnum", "500"
-                "--calcnum", "50"
+                // "--calc_num", "500"
+                "--calc_num", "50"
             ],
         },
         {

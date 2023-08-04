@@ -64,3 +64,14 @@ def percentile_normalization(images, perc_min, perc_max, stats=True):
     percentiles = percentiles.transpose(1, 0, 2)
     min_int, max_int = percentiles[..., 0], percentiles[..., 1]
     return threshold_normalization(images, min_int[..., None, None], max_int[..., None, None], stats=stats)
+
+def sample_sharpness(images, kernel_size=3):
+    from kornia.filters import laplacian, sobel
+    # laplacian = Laplacian(3)
+    # image_sharpness = laplacian_images.mean(dim=(1,2,3))
+    # image_sharpness = laplacian_images.sum(dim=(1,2,3))
+    # laplacian_images = laplacian(images, kernel_size=kernel_size)
+    # image_sharpness = laplacian_images.std(dim=(1,2,3))
+    image_sharpness = sobel(images)
+    image_sharpness = image_sharpness.std(dim=(1,2,3))
+    return image_sharpness

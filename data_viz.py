@@ -133,3 +133,10 @@ def color_image_by_intensity(images, file_path):
 
     print("Saving images as grid")
     save_image_grid(intensity_mapped_channels, file_path, nrow=images.shape[1], cmaps=color_maps)
+
+def plot_hist_w_threshold(metric, threshold, output_file):
+    plt.clf()
+    sns.histplot(metric.cpu().numpy(), bins=20)
+    plt.axvline(threshold, color='r', linestyle='dashed', linewidth=1)
+    plt.savefig(output_file)
+    plt.clf()

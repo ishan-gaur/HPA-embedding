@@ -3,8 +3,9 @@ import numpy as np
 from pipeline import composite_images_from_paths
 from utils import get_dataset_percentiles, get_image_percentiles
 from utils import min_max_normalization, rescale_normalization, threshold_normalization, percentile_normalization
+from utils import sample_sharpness
 from data_viz import plot_intensities, barplot_percentiles, cdf_percentiles, histplot_percentiles
-from data_viz import save_image_grid, color_image_by_intensity
+from data_viz import save_image_grid, color_image_by_intensity, plot_hist_w_threshold
 
 
 def pixel_range_info(args, image_paths, CHANNELS, OUTPUT_DIR):
@@ -23,7 +24,7 @@ def pixel_range_info(args, image_paths, CHANNELS, OUTPUT_DIR):
         # histplot_percentiles(image_percentiles, image_values, CHANNELS, OUTPUT_DIR / 'image_percentiles.png')
         cdf_percentiles(image_percentiles, image_values, CHANNELS, OUTPUT_DIR / 'image_percentiles_cdf.png')
         
-def normalization_dry_run(args, config, image_paths, CHANNELS, OUTPUT_DIR, device, plot_channel=None):
+def normalization_dry_run(args, config, image_paths, CHANNELS, OUTPUT_DIR, device, channel_slice=None):
     image_sample_paths = np.random.choice(image_paths, args.calc_num)
     image_sample = composite_images_from_paths(image_sample_paths, CHANNELS)
 
@@ -82,13 +83,16 @@ def image_by_level_set(args, image_paths, CHANNELS, OUTPUT_DIR):
     image_sample = rescale_normalization(image_sample, stats=False)
     color_image_by_intensity(image_sample, OUTPUT_DIR / 'intensity_colored_images.png')
 
-def sample_sharpness(images, kernel_size=3):
-    from kornia.filters import laplacian, sobel
-    # laplacian = Laplacian(3)
-    # image_sharpness = laplacian_images.mean(dim=(1,2,3))
-    # image_sharpness = laplacian_images.sum(dim=(1,2,3))
-    # laplacian_images = laplacian(images, kernel_size=kernel_size)
-    # image_sharpness = laplacian_images.std(dim=(1,2,3))
-    image_sharpness = sobel(images)
-    image_sharpness = image_sharpness.std(dim=(1,2,3))
-    return image_sharpness
+
+def sharpness_dry_run(dataset_image_paths, sharpness_threshold, output_dir, cmaps):
+    dataset_images = torch.cat([torch.load(p) for p in dataset_image_paths])
+    sharpness = sample_sharpness(dataset_images)
+    output_file = output_dir / f"sharpness_{sharpness_threshold}.png"
+    plot_hist_w_threshold(sharpness, sharpness_threshold, output_file)
+    filtered_out_images = dataset_images[sharpness < sharpness_threshold]
+    assert len(filtered_out_images) > 0, "No images filtered out, try a higher threshold or check that you haven't \
+        already filtered these images out. You may need to rebuild single_cell for this dataset with a lower threshold."
+    print(f"Filtered out {len(filtered_out_images)} images")
+    print(f"That is {len(filtered_out_images) / len(dataset_images) * 100:.2f}% of the dataset")
+    nrow = int(len(filtered_out_images) ** 0.5)
+    save_image_grid(filtered_out_images, output_dir / f"filtered_out_{sharpness_threshold}.png", nrow=nrow, cmaps=cmaps)

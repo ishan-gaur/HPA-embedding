@@ -14,7 +14,7 @@ import cv2
 from scipy import ndimage
 from microfilm.microplot import microshow
 from skimage import measure, segmentation, morphology
-from utils import min_max_normalization
+from utils import min_max_normalization, sample_sharpness
 
 import matplotlib.pyplot as plt
 
@@ -483,7 +483,7 @@ def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_
 channel_min = lambda x: torch.min(torch.min(x, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]
 channel_max = lambda x: torch.max(torch.max(x, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]
 
-def resize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths, target_dim, resize_type=cv2.INTER_LANCZOS4):
+def resize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths, target_dim, name_suffix, resize_type=cv2.INTER_LANCZOS4):
     target_dim = (target_dim, target_dim)
     final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths = [], [], []
     for (seg_image_path, seg_cell_mask_path, seg_nuclei_mask_path) in tqdm(list(zip(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths)), desc="Resizing images"):
@@ -503,19 +503,14 @@ def resize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths, target_d
         resized_images = np.stack(resized_images, axis=0)
         resized_images = np.transpose(resized_images, (0, 3, 1, 2)) # B x C x H x W
         resized_images = torch.Tensor(resized_images.astype("float32"))
-        # normalized_images = (resized_images - torch.min(resized_images, )) / (torch.max(resized_images) - torch.min(resized_images))
-        # if normalize:
-        #     normalized_images = (resized_images - channel_min(resized_images)) / (channel_max(resized_images) - channel_min(resized_images))
-        # else:
-        #     normalized_images = resized_images
 
-        # torch.save(normalized_images, seg_image_path.parent / "images.pt")
-        torch.save(resized_images, seg_image_path.parent / "images.pt")
-        final_image_paths.append(seg_image_path.parent / "images.pt")
-        torch.save(torch.Tensor(resized_cell_masks), seg_cell_mask_path.parent / "cell_masks.pt")
-        final_cell_mask_paths.append(seg_cell_mask_path.parent / "cell_masks.pt")
-        torch.save(torch.Tensor(resized_nuclei_masks), seg_nuclei_mask_path.parent / "nuclei_masks.pt")
-        final_nuclei_mask_paths.append(seg_nuclei_mask_path.parent / "nuclei_masks.pt")
+        IMAGE, CELL_MASK, NUCLEI_MASK = f"images_{name_suffix}.pt", f"cell_masks_{name_suffix}.pt", f"nuclei_masks_{name_suffix}.pt"
+        torch.save(resized_images, seg_image_path.parent / IMAGE)
+        final_image_paths.append(seg_image_path.parent / IMAGE)
+        torch.save(torch.Tensor(np.array(resized_cell_masks)), seg_cell_mask_path.parent / CELL_MASK)
+        final_cell_mask_paths.append(seg_cell_mask_path.parent / CELL_MASK)
+        torch.save(torch.Tensor(np.array(resized_nuclei_masks)), seg_nuclei_mask_path.parent / NUCLEI_MASK)
+        final_nuclei_mask_paths.append(seg_nuclei_mask_path.parent / NUCLEI_MASK)
 
     return final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths
 
@@ -574,10 +569,18 @@ def normalize_images(image_paths, norm_strategy, norm_suffix=None, batch_size=10
     paths = []
     for i in tqdm(range(0, len(image_paths), batch_size), desc="Normalizing images"):
         batch_paths = image_paths[i:min(i+batch_size, len(image_paths))]
+        # print(len(batch_paths))
         images = []
         for path in batch_paths:
             images.append(np.load(path))
+        # print(len(images))
+        # print(images)
+        # if len(images[0].shape) == 2:
+        #     images = np.stack(images, axis=0)
+        #     # images = np.expand_dims(images, axis=1)
+        # else:
         images = np.concatenate(images, axis=0)
+        # print(images.shape)
 
         if norm_strategy == "min_max":
             images = min_max_normalization(images, stats=False)
@@ -590,3 +593,28 @@ def normalize_images(image_paths, norm_strategy, norm_suffix=None, batch_size=10
             np.save(path, images[j])
             paths.append(path)
     return paths
+
+def filter_by_sharpness(seg_image_paths, threshold, seg_cell_mask_paths=None, seg_nuclei_mask_paths=None):
+    if seg_cell_mask_paths is None:
+        seg_cell_mask_paths = [None] * len(seg_image_paths)
+    if seg_nuclei_mask_paths is None:
+        seg_nuclei_mask_paths = [None] * len(seg_image_paths)
+    num_removed, num_total = 0, 0
+    for images_path, cell_mask_path, nuclei_mask_path in tqdm(zip(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths), desc="Filtering by sharpness"):
+        images = torch.tensor(np.load(images_path).astype("float32").squeeze())
+        sharpness = sample_sharpness(images)
+        num_images = len(sharpness)
+        images = images[sharpness > threshold]
+        if cell_mask_path is not None:
+            cell_masks = torch.tensor(np.load(cell_mask_path).astype("float32").squeeze())
+            cell_masks = cell_masks[sharpness > threshold]
+            np.save(cell_mask_path, cell_masks.numpy())
+        if nuclei_mask_path is not None:
+            nuclei_masks = torch.tensor(np.load(nuclei_mask_path).astype("float32").squeeze())
+            nuclei_masks = nuclei_masks[sharpness > threshold]
+            np.save(nuclei_mask_path, nuclei_masks.numpy())
+        sharpness = sharpness[sharpness > threshold]
+        num_removed += num_images - len(sharpness)
+        num_total += num_images
+        np.save(images_path, images.numpy())
+    return num_removed, num_total

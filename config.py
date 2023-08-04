@@ -55,10 +55,11 @@ output_image_size: pixel size of the output image (after resizing)
 """
 cutoff = 512
 nuc_margin = 50
-output_image_size = 256
+output_image_size = 512
 
 """
 Sharpness Filtering
-sharpness_threshold: threshold for sharpness filtering (float)
+sharpness_threshold: threshold for sharpness filtering (float); if None, no filtering is done
 """
-sharpness_threshold = 0.005
+# sharpness_threshold = 0.008
+sharpness_threshold = None
