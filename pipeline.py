@@ -16,8 +16,6 @@ from microfilm.microplot import microshow
 from skimage import measure, segmentation, morphology
 from utils import min_max_normalization, sample_sharpness
 
-import matplotlib.pyplot as plt
-
 suppress_warnings = False
 
 def has_channel_names(data_dir):

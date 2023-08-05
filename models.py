@@ -3,13 +3,7 @@ import torch
 import torch.nn as nn
 import lightning.pytorch as lightning
 from typing import Tuple
-import pickle
-from pathlib import Path
-from data import CellImageDataset
-from torch.utils.data import DataLoader
-from sklearn.mixture import GaussianMixture
-import seaborn as sns
-import matplotlib.pyplot as plt
+
 
 class Classifier(nn.Module):
     def __init__(self,
