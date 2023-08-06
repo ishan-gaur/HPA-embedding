@@ -61,7 +61,7 @@ class ClassifierLit(lightning.LightningModule):
         # cm = confusion_matrix(y, torch.argmax(y_pred, dim=-1))
         # return loss, cm
         y_pred = (torch.argmax(y_pred, dim=-1) + 2) % 3
-        y = (y + 2) % 3
+        y = (torch.argmax(y, dim=-1) + 2) % 3
         return loss, y_pred, y
     
     def training_step(self, batch, batch_idx):
