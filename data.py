@@ -1,6 +1,7 @@
 from pathlib import Path
 import torch    
-from torch.utils.data import Dataset, TensorDataset
+from lightning.pytorch import LightningDataModule
+from torch.utils.data import Dataset, TensorDataset, DataLoader, random_split
 from microfilm.microplot import microshow
 from microfilm.colorify import multichannel_to_rgb
 from pipeline import load_channel_names, load_dir_images
@@ -136,3 +137,28 @@ class DinoRefToCC(Dataset):
     
     def __len__(self):
         return self.X.size(0)
+
+class CellCycleModule(LightningDataModule):
+    def __init__(self, data_dir, data_name, batch_size, num_workers, split):
+        super().__init__()
+        self.data_dir = data_dir
+        self.data_name = data_name
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.split = split
+
+        dataset = DinoRefToCC(self.data_dir, self.data_name)
+        generator = torch.Generator().manual_seed(420)
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, self.split, generator=generator)
+
+    def __shared_dataloader(self, dataset, shuffle=False):
+        return DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, persistent_workers=True, shuffle=shuffle)
+
+    def train_dataloader(self):
+        return self.__shared_dataloader(self.train_dataset, shuffle=True)
+    
+    def val_dataloader(self):
+        return self.__shared_dataloader(self.val_dataset)
+    
+    def test_dataloader(self):
+        return self.__shared_dataloader(self.test_dataset)

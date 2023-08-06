@@ -1,7 +1,9 @@
+import sys
 import os
 import time
 from pathlib import Path
 import argparse
+from importlib import import_module
 
 import torch
 import lightning.pytorch as pl
@@ -10,9 +12,8 @@ from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.strategies import DDPStrategy
 
-from FUCCIDataset import FUCCIDatasetInMemory
-from models import Classifier
-from data import SimpleDataset
+from models import ClassifierLit, DINO
+from data import CellCycleModule
 
 
 ##########################################################################################
@@ -24,22 +25,24 @@ torch.set_float32_matmul_precision('medium')
 
 parser = argparse.ArgumentParser(description="Train a model to align the FUCCI dataset reference channels with the FUCCI channels",
                                 formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument("-d", "--data", required=True, help="path to dataset")
+parser.add_argument("-d", "--data", required=True, help="path to dataset folder")
+parser.add_argument("-n", "--name", required=True, help="dataset version name")
 parser.add_argument("-e", "--epochs", type=int, default=100, help="maximum number of epochs to train for")
-# parser.add_argument("-c", "--checkpoint", help="path to checkpoint to load from")
-parser.add_argument("-n", "--name", default=time.strftime('%Y_%m_%d_%H_%M'), help="Name to help lookup logging directory")
+parser.add_argument("-c", "--checkpoint", help="path to checkpoint to load from")
+parser.add_argument("-r", "--run", default=time.strftime('%Y_%m_%d_%H_%M'), help="Name to help lookup the run's logging directory")
 
 args = parser.parse_args()
 
 if args.checkpoint is not None:
     if not Path(args.checkpoint).exists():
         raise ValueError("Checkpoint path does not exist.")
+    print("WARNING: Checkpoint loading not implemented, ignoring...")
 
 ##########################################################################################
 # Experiment parameters and logging
 ##########################################################################################
 config = {
-    "batch_size": 8,
+    "batch_size": 64,
     "devices": [6],
     # "devices": list(range(4, torch.cuda.device_count())),
     # "devices": list(range(0, torch.cuda.device_count())),
@@ -58,11 +61,9 @@ def print_with_time(msg):
 
 fucci_path = Path(args.data)
 project_name = f"FUCCI_dino_classifier"
-log_folder = Path(f"/data/ishang/fucci_vae/{project_name}_{args.name}")
+log_folder = Path(f"/data/ishang/fucci_vae/{project_name}_{args.run}")
 if not log_folder.exists():
     os.makedirs(log_folder, exist_ok=True)
-    with open(log_folder / "reason.txt", "w") as f:
-        f.write(args.reason)
 lightning_dir = log_folder / "lightning_logs"
 wandb_dir = log_folder
 
@@ -89,32 +90,12 @@ latest_checkpoint_callback = ModelCheckpoint(dirpath=lightning_dir, save_last=Tr
 ##########################################################################################
 
 print_with_time("Setting up data module...")
-datasets = {"FUCCI": FUCCIDatasetInMemory(args.data, imsize=config["imsize"])}
-dm = CrossModalDataModule(
-    datasets,
-    split=config["split"],
-    batch_size=config["batch_size"],
-    num_workers=config["num_workers"]
-)
-
-if args.checkpoint is None:
-    model = CrossModalAutoencoder(
-        modalities=["Reference", "FUCCI"],
-        dataloader_config={
-            "Reference": ("FUCCI", slice(None, 2)),
-            "FUCCI": ("FUCCI", slice(2, None))
-        },
-        nc=2,
-        nf=128,
-        ch_mult=(1, 2, 4, 8, 8, 8),
-        imsize=256,
-        latent_dim=512,
-        lr=5e-6,
-    )
-else:
-    print("Loading from checkpoint")
-    model = CrossModalAutoencoder.load_from_checkpoint(args.checkpoint, strict=False)
-    model.lr = config["lr"]
+dm = CellCycleModule(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"])
+# if not Path(args.data).is_absolute():
+#     args.data = str(Path.cwd() / args.data)
+# sys.path.append(args.data)
+# dataset_config = import_module(args.name)
+model = ClassifierLit(d_input=DINO.CLS_DIM, d_output=3, lr=config["lr"]) # 3 components in the GMM output
 
 wandb_logger.watch(model, log="all", log_freq=10)
 

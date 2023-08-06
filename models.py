@@ -1,8 +1,12 @@
 import math
 import torch
 import torch.nn as nn
+import numpy as np
+from torch import optim
 import lightning.pytorch as lightning
-from typing import Tuple
+from typing import Any, Tuple
+# from sklearn.metrics import confusion_matrix
+from wandb.plot import confusion_matrix
 
 
 class Classifier(nn.Module):
@@ -15,6 +19,8 @@ class Classifier(nn.Module):
         self.model = nn.Sequential(
             nn.Linear(d_input, d_hidden),
             nn.GELU(),
+            nn.Linear(d_hidden, d_hidden),
+            nn.GELU(),
             nn.Linear(d_hidden, d_output),
             nn.Softmax(dim=-1),
         )
@@ -24,6 +30,96 @@ class Classifier(nn.Module):
 
     def loss(self, y_pred, y):
         return nn.CrossEntropyLoss()(y_pred, y)
+
+class ClassifierLit(lightning.LightningModule):
+    def __init__(self,
+        d_input: int = 1024,
+        d_hidden = None,
+        d_output: int = 3,
+        lr: float = 5e-5,
+    ):
+        super().__init__()
+        if d_hidden is None:
+            d_hidden = d_input
+        self.save_hyperparameters()
+        self.model = Classifier(d_input, d_hidden, d_output)
+        self.d_input = d_input
+        self.d_output = d_output
+        self.lr = lr
+        # self.train_cm, self.val_cm, self.test_cm = np.zeros((3, d_output, d_output))
+        self.train_preds, self.val_preds, self.test_preds = [], [], []
+        self.train_labels, self.val_labels, self.test_labels = [], [], []
+
+    def forward(self, x):
+        return self.model(x)
+
+    def __shared_step(self, batch, batch_idx, stage):
+        x, y = batch
+        y_pred = self(x)
+        loss = self.model.loss(y_pred, y)
+        self.log(f"{stage}/loss", loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        # cm = confusion_matrix(y, torch.argmax(y_pred, dim=-1))
+        # return loss, cm
+        y_pred = (torch.argmax(y_pred, dim=-1) + 2) % 3
+        y = (y + 2) % 3
+        return loss, y_pred, y
+    
+    def training_step(self, batch, batch_idx):
+        loss, y_pred, y = self.__shared_step(batch, batch_idx, "train")
+        # self.train_cm += cm
+        self.train_preds.append(y_pred)
+        self.train_labels.append(y)
+        return loss
+
+    def on_train_epoch_end(self):
+        # self.log(f"train/cm", self.train_cm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        # self.train_cm = np.zeros((self.d_output, self.d_output))
+        self.train_preds = torch.cat(self.train_preds).cpu().numpy()
+        self.train_labels = torch.cat(self.train_labels).cpu().numpy()
+        self.logger.experiment.log({
+            "train/cm": confusion_matrix(probs=None, y_true=self.train_labels, preds=self.train_preds, class_names=["G1", "S", "G2"]),
+        })
+        self.train_preds = []
+        self.train_labels = []
+
+    def validation_step(self, batch, batch_idx):
+        loss, y_pred, y = self.__shared_step(batch, batch_idx, "validate")
+        # self.val_cm += cm
+        self.val_preds.append(y_pred)
+        self.val_labels.append(y)
+        return loss
+
+    def on_val_epoch_end(self):
+        # self.log(f"val/cm", self.val_cm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        # self.val_cm = np.zeros((self.d_output, self.d_output))
+        self.val_preds = torch.cat(self.val_preds).cpu().numpy()
+        self.val_labels = torch.cat(self.val_labels).cpu().numpy()
+        self.logger.experiment.log({
+            "validate/cm": confusion_matrix(probs=None, y_true=self.val_labels, preds=self.val_preds, class_names=["G1", "S", "G2"]),
+        })
+        self.val_preds = []
+        self.val_labels = []
+    
+    def test_step(self, batch, batch_idx):
+        loss, y_pred, y = self.__shared_step(batch, batch_idx, "test")
+        # self.test_cm += cm
+        self.test_preds.append(y_pred)
+        self.test_labels.append(y)
+        return loss
+
+    def on_test_epoch_end(self):
+        # self.log(f"test/cm", self.test_cm, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        # self.test_cm = np.zeros((self.d_output, self.d_output))
+        self.test_preds = torch.cat(self.test_preds).cpu().numpy()
+        self.test_labels = torch.cat(self.test_labels).cpu().numpy()
+        self.logger.experiment.log({
+            "test/cm": confusion_matrix(probs=None, y_true=self.test_labels, preds=self.test_preds, class_names=["G1", "S", "G2"]),
+        })
+        self.test_preds = []
+        self.test_labels = []
+
+    def configure_optimizers(self):
+        return optim.Adam(self.parameters(), lr=self.lr)
 
 class DINO(nn.Module):
     PATCH_SIZE = 14
