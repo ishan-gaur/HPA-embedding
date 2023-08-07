@@ -162,3 +162,5 @@ output/
 dev-dataset-FUCCI/
 dev-dataset-CCNB1/
 *.txt
+*.png
+lightning_logs/

@@ -1,28 +1,119 @@
 import math
 import torch
 import torch.nn as nn
+import numpy as np
+from torch import optim
 import lightning.pytorch as lightning
-from typing import Tuple
+import wandb
+from typing import Any, Tuple
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 class Classifier(nn.Module):
     def __init__(self,
         d_input: int = 1024,
         d_hidden: int = 256,
+        n_hidden: int = 0,
         d_output: int = 3,
     ):
         super().__init__()
-        self.model = nn.Sequential(
-            nn.Linear(d_input, d_hidden),
-            nn.GELU(),
-            nn.Linear(d_hidden, d_output),
-            nn.Softmax(dim=-1),
-        )
+        self.model = nn.ModuleList()
+        self.model.append(nn.Linear(d_input, d_hidden))
+        self.model.append(nn.GELU())
+        for _ in range(n_hidden):
+            self.model.append(nn.Linear(d_hidden, d_hidden))
+            self.model.append(nn.GELU())
+        self.model.append(nn.Linear(d_hidden, d_output))
+        self.model.append(nn.Softmax(dim=-1))
+        self.model = nn.Sequential(*self.model)
 
     def forward(self, x):
         return self.model(x)
 
     def loss(self, y_pred, y):
         return nn.CrossEntropyLoss()(y_pred, y)
+
+class ClassifierLit(lightning.LightningModule):
+    def __init__(self,
+        d_input: int = 1024,
+        d_hidden = None,
+        d_output: int = 3,
+        lr: float = 5e-5,
+        soft: bool = False,
+    ):
+        super().__init__()
+        if d_hidden is None:
+            d_hidden = d_input
+        self.save_hyperparameters()
+        self.model = Classifier(d_input, d_hidden, d_output)
+        self.d_input = d_input
+        self.d_output = d_output
+        self.lr = lr
+        self.train_preds, self.val_preds, self.test_preds = [], [], []
+        self.train_labels, self.val_labels, self.test_labels = [], [], []
+        self.soft = soft
+
+    def forward(self, x):
+        return self.model(x)
+
+    def __shared_step(self, batch, batch_idx, stage):
+        x, y = batch
+        if not self.soft:
+            y = torch.argmax(y, dim=-1)
+        y_pred = self(x)
+        loss = self.model.loss(y_pred, y)
+        preds = torch.argmax(y_pred, dim=-1).cpu().numpy()
+        labels = torch.argmax(y, dim=-1).cpu().numpy() if self.soft else y.cpu().numpy()
+        self.log(f"{stage}/loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        return loss, preds, labels
+    
+    def __on_shared_epoch_end(self, preds, labels, stage):
+        plt.clf()
+        preds, labels = np.concatenate(preds), np.concatenate(labels)
+        cm = confusion_matrix(labels, preds)
+        ax = sns.heatmap(cm.astype(np.int32), annot=True, fmt="d", vmin=0, vmax=len(labels))
+        ax.set_xlabel("Predicted")
+        ax.xaxis.set_ticklabels(["G1", "S", "G2"])
+        ax.set_ylabel("True")
+        ax.yaxis.set_ticklabels(["G1", "S", "G2"])
+        fig = ax.get_figure()
+        self.logger.experiment.log({
+            f"{stage}/cm": wandb.Image(fig),
+        })
+
+    def training_step(self, batch, batch_idx):
+        loss, preds, labels = self.__shared_step(batch, batch_idx, "train")
+        self.train_preds.append(preds)
+        self.train_labels.append(labels)
+        return loss
+
+    def on_train_epoch_end(self):
+        self.__on_shared_epoch_end(self.train_preds, self.train_labels, "train")
+        self.train_preds, self.train_labels = [], []
+
+    def validation_step(self, batch, batch_idx):
+        loss, preds, labels = self.__shared_step(batch, batch_idx, "validate")
+        self.val_preds.append(preds)
+        self.val_labels.append(labels)
+        return loss
+
+    def on_validation_epoch_end(self):
+        self.__on_shared_epoch_end(self.val_preds, self.val_labels, "validate")
+        self.val_preds, self.val_labels = [], []
+    
+    def test_step(self, batch, batch_idx):
+        loss, preds, labels = self.__shared_step(batch, batch_idx, "test")
+        self.test_preds.append(preds)
+        self.test_labels.append(labels)
+        return loss
+
+    def on_test_epoch_end(self):
+        self.__on_shared_epoch_end(self.test_preds, self.test_labels, "test")
+        self.test_preds, self.test_labels = [], []
+
+    def configure_optimizers(self):
+        return optim.Adam(self.parameters(), lr=self.lr)
 
 class DINO(nn.Module):
     PATCH_SIZE = 14

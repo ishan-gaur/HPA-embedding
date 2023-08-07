@@ -1,6 +1,7 @@
 from pathlib import Path
 import torch    
-from torch.utils.data import Dataset, TensorDataset
+from lightning.pytorch import LightningDataModule
+from torch.utils.data import Dataset, TensorDataset, DataLoader, random_split
 from microfilm.microplot import microshow
 from microfilm.colorify import multichannel_to_rgb
 from pipeline import load_channel_names, load_dir_images
@@ -11,21 +12,28 @@ from glob import glob
 
 class CellImageDataset(Dataset):
     # images are C x H x W
-    def __init__(self, index_file, channel_colors=None):
+    def __init__(self, index_file, channel_colors=None, channels=None):
         data_dir = Path(index_file).parent
         self.data_dir = data_dir
         self.channel_names = load_channel_names(data_dir)
         self.images = torch.concat(load_dir_images(index_file))
         self.channel_colors = channel_colors
+        self.channels = channels
     
     def __len__(self):
         return len(self.images)
 
     def __getitem__(self, idx):
-        return self.images[idx]
+        if self.channels is None:
+            return self.images[idx]
+        else:
+            return self.images[idx, self.channels]
 
     def get_channel_names(self):
-        return self.channel_names
+        if self.channels is None:
+            return self.channel_names
+        else:
+            return [self.channel_names[i] for i in self.channels]
 
     def set_channel_colors(self, channel_colors):
         self.channel_colors = channel_colors
@@ -44,17 +52,17 @@ class CellImageDataset(Dataset):
             raise ValueError(f"channel_colors not set and not suitable defaults for {len(self.channel_names)} channels.")
 
     def view(self, idx):
-        image = self.images[idx].cpu().numpy()
+        image = self.__getitem__(idx).cpu().numpy()
         if self.channel_colors is None:
             self.__set_default_channel_colors__()
         microshow(image, cmaps=self.channel_colors)
 
     def convert_to_rgb(self, i):
-        nans = torch.sum(torch.isnan(self.images[i]))
+        nans = torch.sum(torch.isnan(self.__getitem__(i)))
         if nans > 0:
             print(f"Warning: {nans} NaNs in image {i}")
-        rgb_image, _, _, _ = multichannel_to_rgb(self.images[i].numpy(), cmaps=self.channel_colors,
-                                                 limits=(np.nanmin(self.images[i]), np.nanmax(self.images[i])))
+        rgb_image, _, _, _ = multichannel_to_rgb(self.__getitem__(i).numpy(), cmaps=self.channel_colors,
+                                                 limits=(np.nanmin(self.__getitem__(i)), np.nanmax(self.__getitem__(i))))
         return torch.Tensor(rgb_image)
 
     def as_rgb(self, channel_colors=None, num_workers=1):
@@ -63,11 +71,12 @@ class CellImageDataset(Dataset):
                 self.channel_colors = channel_colors
             else:
                 self.__set_default_channel_colors__()
+        assert len(self.channels) == len(self.channel_colors), "Number of channel colors and channels must be equal"
         device = self.images.device
         self.images.cpu()
         rgb_images = []
         for i in tqdm(range(self.__len__()), total=self.__len__(), desc="Converting to RGB"):
-            rgb_image, _, _, _ = multichannel_to_rgb(self.images[i].numpy(), cmaps=self.channel_colors)
+            rgb_image, _, _, _ = multichannel_to_rgb(self.__getitem__(i).numpy(), cmaps=self.channel_colors)
             rgb_images.append(torch.Tensor(rgb_image))
         rgb_images = torch.stack(rgb_images)
         rgb_images.to(device)
@@ -116,3 +125,39 @@ class SimpleDataset(Dataset):
     def has_cache_files(path):
         cache_files = list(path.parent.glob(f"{path.stem}-*.pt"))
         return len(cache_files) > 0
+
+class DinoRefToCC(Dataset):
+    def __init__(self, data_dir, data_name):
+        self.X = torch.load(data_dir / f"ref_embeddings_{data_name}.pt")
+        self.Y = torch.load(data_dir / f"gmm_probs_{data_name}.pt")
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.Y[idx]
+    
+    def __len__(self):
+        return self.X.size(0)
+
+class CellCycleModule(LightningDataModule):
+    def __init__(self, data_dir, data_name, batch_size, num_workers, split):
+        super().__init__()
+        self.data_dir = data_dir
+        self.data_name = data_name
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.split = split
+
+        dataset = DinoRefToCC(self.data_dir, self.data_name)
+        generator = torch.Generator().manual_seed(420)
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, self.split, generator=generator)
+
+    def __shared_dataloader(self, dataset, shuffle=False):
+        return DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, persistent_workers=True, shuffle=shuffle)
+
+    def train_dataloader(self):
+        return self.__shared_dataloader(self.train_dataset, shuffle=True)
+    
+    def val_dataloader(self):
+        return self.__shared_dataloader(self.val_dataset)
+    
+    def test_dataloader(self):
+        return self.__shared_dataloader(self.test_dataset)

@@ -2,6 +2,7 @@ import sys
 import inspect
 import argparse
 import config
+import pickle
 from pathlib import Path
 from importlib import import_module
 from tqdm import tqdm
@@ -12,6 +13,9 @@ from pipeline import create_image_paths_file, image_paths_from_folders, create_d
 from pipeline import segmentator_setup, get_masks, normalize_images, clean_and_save_masks, crop_images, resize, filter_by_sharpness
 from stats import pixel_range_info, normalization_dry_run, image_by_level_set, sample_sharpness, sharpness_dry_run
 from data import CellImageDataset, SimpleDataset
+from sklearn.mixture import GaussianMixture
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 import torch
 import numpy as np
@@ -20,16 +24,17 @@ from torch.utils.data import DataLoader
 utils.silent = True
 pipeline.suppress_warnings = True
 
-stats_opt = ['norm', 'pix_range', 'int_img', 'sample', 'sharp']
+stats_opt = ['norm', 'pix_range', 'int_img', 'sample', 'sharp', 'name']
 stats_opt_desc = {
     'norm': 'Normalize images and show results and statistics',
     'pix_range': 'Show pixel range statistics, esp percentile intensities per channel',
     'int_img': 'Show image level intensity statistics',
     'sample': 'Show sample images from final dataset',
-    'sharp': 'Show sharpness statistics'
+    'sharp': 'Show sharpness statistics',
+    'name': 'Show dataset names'
 }
 stats_desc = '\n'.join([f"{opt}: {stats_opt_desc[opt]};" for opt in stats_opt])
-NORM, PIX_RANGE, INT_IMG, SAMPLE, SHARP = 0, 1, 2, 3, 4
+NORM, PIX_RANGE, INT_IMG, SAMPLE, SHARP, NAME = 0, 1, 2, 3, 4, 5
 
 parser = argparse.ArgumentParser(description='Dataset preprocessing pipline')
 parser.add_argument('--data_dir', type=str, help='Path to dataset, should be absolute path', required=True)
@@ -45,6 +50,8 @@ parser.add_argument('--clean_masks', action='store_true', help='Clean masks: rem
 parser.add_argument('--single_cell', action='store_true', help='Crop and save single cell images')
 parser.add_argument('--rgb', action='store_true', help='Convert images to RGB')
 parser.add_argument('--dino_cls', action='store_true', help='Cache dino cls embeddings')
+parser.add_argument('--dino_cls_ref', action='store_true', help='Cache dino cls embeddings on reference channels only')
+parser.add_argument('--fucci_gmm', action='store_true', help='Fit GMM to FUCCI intensities')
 parser.add_argument('--batch_size', type=int, default=10, help='Batch size for dino inference')
 parser.add_argument('--device', type=int, default=7, help='GPU device number')
 parser.add_argument('--rebuild', action='store_true', help='Rebuild specifed steps even if files exist')
@@ -77,6 +84,8 @@ except ModuleNotFoundError:
     dataset_config = None
 RGB_DATASET = DATA_DIR / f"rgb_{args.name}.pt"
 EMBEDDINGS_DATASET = DATA_DIR / f"embeddings_{args.name}.pt"
+GMM_PATH = DATA_DIR / f"gmm_{args.name}.pkl"
+GMM_PROBS = DATA_DIR / f"gmm_probs_{args.name}.pt"
 
 CHANNELS = load_channel_names(DATA_DIR) if config.channels is None else config.channels
 if config.channels is None:
@@ -88,6 +97,12 @@ print(f"Using device {device}")
 
 
 if args.stats is not None:
+    if args.stats == stats_opt[NAME]:
+        # find all files like index_{name}.csv and print name
+        print(f"Dataset names:")
+        for file in DATA_DIR.glob("index_*.csv"):
+            print(f"{file.stem[6:]}")
+
     data_paths_file, num_paths = create_image_paths_file(DATA_DIR)
     image_paths = image_paths_from_folders(data_paths_file)
     if args.stats == stats_opt[PIX_RANGE]:
@@ -194,19 +209,32 @@ if args.rgb or args.all:
         rgb_dataset = dataset.as_rgb()
         rgb_dataset.save(RGB_DATASET)
 
-if args.dino_cls:
+if args.dino_cls or args.dino_cls_ref or args.all:
     from models import DINO
+    assert not (args.dino_cls and args.dino_cls_ref), "Cannot run both DINO classification and DINO classification with reference at the same time, please run separately."
     assert not no_name, "Name of dataset must be specified"
     assert dataset_config is not None, "Dataset config file must be specified via name, this means that the config for this data doesn't exist or doesn't make the provided name"
+
+    if args.dino_cls_ref:
+        EMBEDDINGS_DATASET = EMBEDDINGS_DATASET.parent / ("ref_" + EMBEDDINGS_DATASET.name)
+
     if EMBEDDINGS_DATASET.exists() and not args.rebuild:
         print("Embeddings file already exists, skipping. Set --rebuild to overwrite.")
     else:
-        assert SimpleDataset.has_cache_files(RGB_DATASET), "RGB dataset does not exist, run --rgb first"
+        assert args.dino_cls_ref or SimpleDataset.has_cache_files(RGB_DATASET), "RGB dataset does not exist, run --rgb first"
+        assert args.dino_cls or NAME_INDEX.exists(), "Index file for single cell images does not exist, run --single_cell first"
         print("Running DINO model to get embeddings")
         if type(dataset_config.output_image_size) != tuple:
             dataset_config.output_image_size = (dataset_config.output_image_size, dataset_config.output_image_size)
         dino = DINO(imsize=dataset_config.output_image_size).to(device)
-        dataset = SimpleDataset(path=RGB_DATASET)
+        if args.dino_cls:
+            dataset = SimpleDataset(path=RGB_DATASET)
+        elif args.dino_cls_ref:
+            dataset = CellImageDataset(NAME_INDEX, ["pure_blue", "pure_red"], channels=[0, 1])
+            assert dataset[0].shape[0] == 2, "Dataset should've been only two channels at this point, got shape " + str(dataset[0].shape)
+            dataset = dataset.as_rgb()
+            assert dataset[0].shape[0] == 3, "Dataset should've been converted to RGB at this point, got shape " + str(dataset[0].shape)
+            assert torch.sum(dataset[0:10, 1, :, :] != 0) == 0, "Dataset should've been converted to RGB with green channel zeroed out"
         dataloader = DataLoader(dataset, batch_size=args.batch_size, num_workers=1, shuffle=False)
 
         embeddings = []
@@ -221,3 +249,38 @@ if args.dino_cls:
         print(embeddings.shape)
 
 
+if args.fucci_gmm or args.all:
+    assert not no_name, "Name of dataset must be specified"
+    assert NAME_INDEX.exists(), "Index file for single cell images does not exist, run --single_cell first"
+    if GMM_PROBS.exists() and not args.rebuild:
+        print("GMM probabilities file already exists, skipping. Set --rebuild to overwrite.")
+    else:
+        dataset = CellImageDataset(NAME_INDEX)
+        dataloader = DataLoader(dataset, batch_size=1000, num_workers=1, shuffle=False)
+        FUCCI_intensities = []
+        for batch in tqdm(iter(dataloader), desc="Getting FUCCI intensities"):
+            FUCCI_intensities.append(torch.mean(batch[:, 2:], dim=(2, 3)))
+        FUCCI_intensities = torch.cat(FUCCI_intensities)
+        FUCCI_intensities = torch.log10(FUCCI_intensities + 1e-6)
+        plt.clf()
+        sns.kdeplot(x=FUCCI_intensities[:, 0], y=FUCCI_intensities[:, 1])
+        plt.savefig(DATA_DIR / f"fucci_plot_{args.name}.png")
+        plt.clf()
+
+        print("Creating GMM")
+        gmm = GaussianMixture(n_components=3)
+        gmm.fit(FUCCI_intensities)
+        pickle.dump(gmm, open(GMM_PATH, "wb"))
+        print("Saved GMM to pickle file at " + str(GMM_PATH))
+
+        print("Creating GMM probabilities")
+        probs = gmm.predict_proba(FUCCI_intensities)
+        probs = torch.tensor(probs)
+        torch.save(probs, GMM_PROBS)
+        print("Saved GMM probabilities to torch .pt file at " + str(GMM_PROBS))
+        GMM_PLOT = OUTPUT_DIR / f"gmm_plot_{args.name}.png"
+        plt.clf()
+        sns.kdeplot(x=FUCCI_intensities[:, 0], y=FUCCI_intensities[:, 1], hue=probs.argmax(dim=1), palette="Set2")
+        plt.savefig(GMM_PLOT)
+        plt.clf()
+        print("Saved GMM plot to " + str(GMM_PLOT))
