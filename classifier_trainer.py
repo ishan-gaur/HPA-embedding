@@ -43,17 +43,13 @@ if args.checkpoint is not None:
 ##########################################################################################
 config = {
     "batch_size": 64,
-    "devices": [6],
-    # "devices": list(range(4, torch.cuda.device_count())),
-    # "devices": list(range(0, torch.cuda.device_count())),
+    "devices": [7],
     "num_workers": 1,
-    # "num_workers": 4,
-    # "num_workers": 8,
     "split": (0.64, 0.16, 0.2),
     "lr": 5e-5,
     "epochs": args.epochs,
-    "latent_dim": 512,
     "lambda": 5e6,
+    "soft": True,
 }
 
 def print_with_time(msg):
@@ -91,11 +87,7 @@ latest_checkpoint_callback = ModelCheckpoint(dirpath=lightning_dir, save_last=Tr
 
 print_with_time("Setting up data module...")
 dm = CellCycleModule(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"])
-# if not Path(args.data).is_absolute():
-#     args.data = str(Path.cwd() / args.data)
-# sys.path.append(args.data)
-# dataset_config = import_module(args.name)
-model = ClassifierLit(d_input=DINO.CLS_DIM, d_output=3, lr=config["lr"]) # 3 components in the GMM output
+model = ClassifierLit(d_input=DINO.CLS_DIM, d_output=3, lr=config["lr"], soft=config["soft"]) # 3 components in the GMM output
 
 wandb_logger.watch(model, log="all", log_freq=10)
 
@@ -112,9 +104,6 @@ trainer = pl.Trainer(
     callbacks=[
         val_checkpoint_callback,
         latest_checkpoint_callback,
-        # LearningRateMonitor(logging_interval='step'),
-        # ReconstructionVisualization(channels=None if args.model == "total" else dm.get_channels(), mode=reconstuction_mode),
-        # EmbeddingLogger(every_n_epochs=1, mode=args.model, channels=dm.get_channels() if args.model == "all" else None),
     ]
 )
 

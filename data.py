@@ -130,7 +130,6 @@ class DinoRefToCC(Dataset):
     def __init__(self, data_dir, data_name):
         self.X = torch.load(data_dir / f"ref_embeddings_{data_name}.pt")
         self.Y = torch.load(data_dir / f"gmm_probs_{data_name}.pt")
-        # self.Y = torch.argmax(self.Y, dim=1)
 
     def __getitem__(self, idx):
         return self.X[idx], self.Y[idx]

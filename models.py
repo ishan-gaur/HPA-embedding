@@ -14,17 +14,19 @@ class Classifier(nn.Module):
     def __init__(self,
         d_input: int = 1024,
         d_hidden: int = 256,
+        n_hidden: int = 0,
         d_output: int = 3,
     ):
         super().__init__()
-        self.model = nn.Sequential(
-            nn.Linear(d_input, d_hidden),
-            nn.GELU(),
-            nn.Linear(d_hidden, d_hidden),
-            nn.GELU(),
-            nn.Linear(d_hidden, d_output),
-            nn.Softmax(dim=-1),
-        )
+        self.model = nn.ModuleList()
+        self.model.append(nn.Linear(d_input, d_hidden))
+        self.model.append(nn.GELU())
+        for _ in range(n_hidden):
+            self.model.append(nn.Linear(d_hidden, d_hidden))
+            self.model.append(nn.GELU())
+        self.model.append(nn.Linear(d_hidden, d_output))
+        self.model.append(nn.Softmax(dim=-1))
+        self.model = nn.Sequential(*self.model)
 
     def forward(self, x):
         return self.model(x)
@@ -38,6 +40,7 @@ class ClassifierLit(lightning.LightningModule):
         d_hidden = None,
         d_output: int = 3,
         lr: float = 5e-5,
+        soft: bool = False,
     ):
         super().__init__()
         if d_hidden is None:
@@ -49,15 +52,19 @@ class ClassifierLit(lightning.LightningModule):
         self.lr = lr
         self.train_preds, self.val_preds, self.test_preds = [], [], []
         self.train_labels, self.val_labels, self.test_labels = [], [], []
+        self.soft = soft
 
     def forward(self, x):
         return self.model(x)
 
     def __shared_step(self, batch, batch_idx, stage):
         x, y = batch
+        if not self.soft:
+            y = torch.argmax(y, dim=-1)
         y_pred = self(x)
         loss = self.model.loss(y_pred, y)
-        preds, labels = torch.argmax(y_pred, dim=-1).cpu().numpy(), torch.argmax(y, dim=-1).cpu().numpy()
+        preds = torch.argmax(y_pred, dim=-1).cpu().numpy()
+        labels = torch.argmax(y, dim=-1).cpu().numpy() if self.soft else y.cpu().numpy()
         self.log(f"{stage}/loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         return loss, preds, labels
     
