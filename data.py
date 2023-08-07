@@ -126,6 +126,26 @@ class SimpleDataset(Dataset):
         cache_files = list(path.parent.glob(f"{path.stem}-*.pt"))
         return len(cache_files) > 0
 
+class PseudotimeClasses(Dataset):
+    def __init__(self, data_dir, data_name):
+        self.Y = torch.load(data_dir / f"gmm_probs_{data_name}.pt")
+
+    def __getitem__(self, idx):
+        return self.Y[idx]
+    
+    def __len__(self):
+        return self.Y.size(0)
+
+class DINORefEmbed(Dataset):
+    def __init__(self, data_dir, data_name):
+        self.X = torch.load(data_dir / f"ref_embeddings_{data_name}.pt")
+
+    def __getitem__(self, idx):
+        return self.X[idx]
+    
+    def __len__(self):
+        return self.X.size(0)
+
 class DinoRefToCC(Dataset):
     def __init__(self, data_dir, data_name):
         self.X = torch.load(data_dir / f"ref_embeddings_{data_name}.pt")
