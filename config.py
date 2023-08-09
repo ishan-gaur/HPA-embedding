@@ -14,8 +14,8 @@ The indices of the channels that correspond to DAPI, Tubulin, and Calb2 respecti
 array. If you don't have calb2, set it to None. The others must be set to integers.
 These are used by the segmentation code to feed in the correct channels to the segmentation model.
 """
-channels=["nuclei", "microtubule", "Geminin", "CDT1"]
-cmaps=["pure_blue", "pure_yellow", "pure_green", "pure_red"]
+channels=["nuclei", "microtubule", "cyclinb1"]
+cmaps=["pure_blue", "pure_red", "pure_green"]
 dapi, tubl, calb2 = 0, 1, None
 
 """
@@ -53,9 +53,9 @@ nuc_margin: pixel margin around the nucleus after the crop (sometimes the nucleu
     which is originally centered around the bounding box)
 output_image_size: pixel size of the output image (after resizing)
 """
-cutoff = 512
+cutoff = 256 * 3
 nuc_margin = 50
-output_image_size = 512
+output_image_size = 256
 
 """
 Sharpness Filtering

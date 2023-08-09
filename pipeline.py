@@ -578,7 +578,7 @@ def normalize_images(image_paths, norm_strategy, norm_suffix=None, batch_size=10
         #     # images = np.expand_dims(images, axis=1)
         # else:
         images = np.concatenate(images, axis=0)
-        # print(images.shape)
+        print(images.shape)
 
         if norm_strategy == "min_max":
             images = min_max_normalization(images, stats=False)

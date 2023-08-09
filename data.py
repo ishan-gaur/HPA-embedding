@@ -16,9 +16,25 @@ class CellImageDataset(Dataset):
         data_dir = Path(index_file).parent
         self.data_dir = data_dir
         self.channel_names = load_channel_names(data_dir)
-        self.images = torch.concat(load_dir_images(index_file))
+        # self.images = torch.concat(load_dir_images(index_file))
+        # image_tensors = load_dir_images(index_file)
+        from pipeline import load_index_paths
+        image_paths, _, _ = load_index_paths(index_file)
+        batch_size = 500
+        for i in tqdm(range(0, len(image_paths), batch_size), desc="Loading dataset images"):
+            image_tensors = []
+            for image_path in image_paths[i:i+batch_size]:
+                image_tensors.append(torch.load(Path(image_path)))
+            image_tensors = torch.concat(image_tensors)
+            if i == 0:
+                self.images = image_tensors
+            else:
+                self.images = torch.concat((self.images, image_tensors))
+
+        print(f"Loaded {len(self.images)} images from {len(image_paths)} files.")
+        
         self.channel_colors = channel_colors
-        self.channels = channels
+        self.channels = channels if channels is not None else list(range(len(self.channel_names)))
     
     def __len__(self):
         return len(self.images)
@@ -137,6 +153,17 @@ class DinoRefToCC(Dataset):
     def __len__(self):
         return self.X.size(0)
 
+class RefToCC(Dataset):
+    def __init__(self, data_dir, data_name):
+        self.X = CellImageDataset(data_dir / f"index_{data_name}.csv", channels=[0, 1])
+        self.Y = torch.load(data_dir / f"gmm_probs_{data_name}.pt")
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.Y[idx]
+
+    def __len__(self):
+        return len(self.X)
+
 class CellCycleModule(LightningDataModule):
     def __init__(self, data_dir, data_name, batch_size, num_workers, split):
         super().__init__()
@@ -147,6 +174,31 @@ class CellCycleModule(LightningDataModule):
         self.split = split
 
         dataset = DinoRefToCC(self.data_dir, self.data_name)
+        generator = torch.Generator().manual_seed(420)
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, self.split, generator=generator)
+
+    def __shared_dataloader(self, dataset, shuffle=False):
+        return DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, persistent_workers=True, shuffle=shuffle)
+
+    def train_dataloader(self):
+        return self.__shared_dataloader(self.train_dataset, shuffle=True)
+    
+    def val_dataloader(self):
+        return self.__shared_dataloader(self.val_dataset)
+    
+    def test_dataloader(self):
+        return self.__shared_dataloader(self.test_dataset)
+
+class RefChannelCellCycle(LightningDataModule):
+    def __init__(self, data_dir, data_name, batch_size, num_workers, split):
+        super().__init__()
+        self.data_dir = data_dir
+        self.data_name = data_name
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.split = split
+
+        dataset = RefToCC(self.data_dir, self.data_name)
         generator = torch.Generator().manual_seed(420)
         self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, self.split, generator=generator)
 

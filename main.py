@@ -12,8 +12,6 @@ import pipeline
 from pipeline import create_image_paths_file, image_paths_from_folders, create_data_path_index, load_index_paths, load_channel_names, save_channel_names
 from pipeline import segmentator_setup, get_masks, normalize_images, clean_and_save_masks, crop_images, resize, filter_by_sharpness
 from stats import pixel_range_info, normalization_dry_run, image_by_level_set, sample_sharpness, sharpness_dry_run
-from data import CellImageDataset, SimpleDataset
-from sklearn.mixture import GaussianMixture
 import seaborn as sns
 import matplotlib.pyplot as plt
 
@@ -108,7 +106,7 @@ if args.stats is not None:
     if args.stats == stats_opt[PIX_RANGE]:
         pixel_range_info(args, image_paths, CHANNELS, OUTPUT_DIR)
     if args.stats == stats_opt[NORM]:
-        normalization_dry_run(args, config, image_paths, CHANNELS, OUTPUT_DIR, device, channel_slice=slice(2, None))
+        normalization_dry_run(args, config, image_paths, CHANNELS, OUTPUT_DIR, device)
     if args.stats == stats_opt[INT_IMG]:
         image_by_level_set(args, image_paths, CHANNELS, OUTPUT_DIR)
     if args.stats == stats_opt[SAMPLE]:
@@ -197,6 +195,7 @@ if args.single_cell or args.all:
         dataset_config = config
 
 if args.rgb or args.all:
+    from data import CellImageDataset, SimpleDataset
     assert not no_name, "Name of dataset must be specified"
     assert dataset_config is not None, "Dataset config file must be specified via name, this means that the config for this data doesn't exist or doesn't make the provided name"
     if SimpleDataset.has_cache_files(RGB_DATASET) and not args.rebuild:
@@ -210,6 +209,7 @@ if args.rgb or args.all:
         rgb_dataset.save(RGB_DATASET)
 
 if args.dino_cls or args.dino_cls_ref or args.all:
+    from data import CellImageDataset, SimpleDataset
     from models import DINO
     assert not (args.dino_cls and args.dino_cls_ref), "Cannot run both DINO classification and DINO classification with reference at the same time, please run separately."
     assert not no_name, "Name of dataset must be specified"
@@ -250,6 +250,8 @@ if args.dino_cls or args.dino_cls_ref or args.all:
 
 
 if args.fucci_gmm or args.all:
+    from sklearn.mixture import GaussianMixture
+    from data import CellImageDataset, SimpleDataset
     assert not no_name, "Name of dataset must be specified"
     assert NAME_INDEX.exists(), "Index file for single cell images does not exist, run --single_cell first"
     if GMM_PROBS.exists() and not args.rebuild:

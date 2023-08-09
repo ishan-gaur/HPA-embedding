@@ -13,7 +13,7 @@ from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
 from lightning.pytorch.strategies import DDPStrategy
 
 from models import ClassifierLit, DINO
-from data import CellCycleModule
+from data import CellCycleModule, RefChannelCellCycle
 
 
 ##########################################################################################
@@ -42,21 +42,28 @@ if args.checkpoint is not None:
 # Experiment parameters and logging
 ##########################################################################################
 config = {
-    "batch_size": 64,
-    "devices": [7],
+    "batch_size": 32,
+    "devices": [4],
     "num_workers": 1,
     "split": (0.64, 0.16, 0.2),
-    "lr": 5e-5,
+    "conv": False,
+    "lr": 1e-4,
     "epochs": args.epochs,
-    "lambda": 5e6,
-    "soft": True,
+    "soft": False,
+    "nf": 4,
+    "n_hidden": 1,
+    "d_hidden": DINO.CLS_DIM * 4,
+    # "dropout": (0.8, 0.5, 0.2)
+    "dropout": True,
 }
+
+NUM_CHANNELS, GMM_CLASSES = 2, 3
 
 def print_with_time(msg):
     print(f"[{time.strftime('%m/%d/%Y @ %H:%M')}] {msg}")
 
 fucci_path = Path(args.data)
-project_name = f"FUCCI_dino_classifier"
+project_name = f"FUCCI_conv_classifier" if config["conv"] else f"FUCCI_dino_classifier"
 log_folder = Path(f"/data/ishang/fucci_vae/{project_name}_{args.run}")
 if not log_folder.exists():
     os.makedirs(log_folder, exist_ok=True)
@@ -86,8 +93,20 @@ latest_checkpoint_callback = ModelCheckpoint(dirpath=lightning_dir, save_last=Tr
 ##########################################################################################
 
 print_with_time("Setting up data module...")
-dm = CellCycleModule(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"])
-model = ClassifierLit(d_input=DINO.CLS_DIM, d_output=3, lr=config["lr"], soft=config["soft"]) # 3 components in the GMM output
+if not config["conv"]:
+    dm = CellCycleModule(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"])
+    model = ClassifierLit(d_input=DINO.CLS_DIM, d_output=3, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
+                          dropout=config["dropout"], lr=config["lr"], soft=config["soft"]) # 3 components in the GMM output
+else:
+    dm = RefChannelCellCycle(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"])
+    args.data = Path(args.data)
+    if not args.data.is_absolute():
+        args.data = Path.cwd() / args.data
+    config_file = args.data / args.name
+    sys.path.append(str(config_file.parent))
+    dataset_config = import_module(str(config_file.stem))
+    model = ClassifierLit(conv=True, imsize=dataset_config.output_image_size, nc=NUM_CHANNELS, nf=config["nf"], d_output=GMM_CLASSES,
+                          dropout=config["dropout"], lr=config["lr"], soft=config["soft"]) # 3 components in the GMM output
 
 wandb_logger.watch(model, log="all", log_freq=10)
 
@@ -97,7 +116,7 @@ trainer = pl.Trainer(
     default_root_dir=lightning_dir,
     accelerator="gpu",
     devices=config["devices"],
-    strategy=DDPStrategy(find_unused_parameters=True),
+    # strategy=DDPStrategy(find_unused_parameters=True),
     logger=wandb_logger,
     max_epochs=config["epochs"],
     gradient_clip_val=5e5,

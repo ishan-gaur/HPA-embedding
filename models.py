@@ -6,7 +6,7 @@ from torch import optim
 import lightning.pytorch as lightning
 import wandb
 from typing import Any, Tuple
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, accuracy_score
 import seaborn as sns
 import matplotlib.pyplot as plt
 
@@ -16,14 +16,24 @@ class Classifier(nn.Module):
         d_hidden: int = 256,
         n_hidden: int = 0,
         d_output: int = 3,
+        dropout: bool = False,
     ):
         super().__init__()
         self.model = nn.ModuleList()
+        self.model.append(nn.BatchNorm1d(d_input))
+        if dropout:
+            self.model.append(nn.Dropout(0.5))
         self.model.append(nn.Linear(d_input, d_hidden))
         self.model.append(nn.GELU())
         for _ in range(n_hidden):
+            if dropout:
+                self.model.append(nn.Dropout(0.5))
+            self.model.append(nn.BatchNorm1d(d_hidden))
             self.model.append(nn.Linear(d_hidden, d_hidden))
             self.model.append(nn.GELU())
+        if dropout:
+            self.model.append(nn.Dropout(0.2))
+        self.model.append(nn.BatchNorm1d(d_hidden))
         self.model.append(nn.Linear(d_hidden, d_output))
         self.model.append(nn.Softmax(dim=-1))
         self.model = nn.Sequential(*self.model)
@@ -33,22 +43,83 @@ class Classifier(nn.Module):
 
     def loss(self, y_pred, y):
         return nn.CrossEntropyLoss()(y_pred, y)
+    
+class ConvClassifier(nn.Module):
+    def __init__(self,
+        imsize: int = 256,
+        nc: int = 2,
+        nf: int = 4,
+        d_hidden: int = 256,
+        n_hidden: int = 0,
+        d_output: int = 3,
+        dropout: bool = False,
+    ):
+        super().__init__()
+        self.model = nn.ModuleList()
+        self.num_down = int(math.log2(imsize))
+        if dropout:
+            self.model.append(nn.Dropout(0.8))
+        self.model.append(nn.Conv2d(nc, nf, 4, 2, 1))
+        self.model.append(nn.LeakyReLU(0.2, inplace=True))
+        for _ in range(self.num_down - 1):
+            if dropout:
+                self.model.append(nn.Dropout(0.8))
+            self.model.append(nn.Conv2d(nf, nf*2, 4, 2, 1))
+            self.model.append(nn.LeakyReLU(0.2, inplace=True))
+            # self.model.append(nn.BatchNorm2d(nf*2))
+            nf *= 2
+        self.model = nn.Sequential(*self.model)
+
+        input_size = nf * (imsize // 2**self.num_down)**2 
+        self.fully_connected = nn.ModuleList()
+        self.fully_connected.append(nn.BatchNorm1d(input_size))
+        if dropout:
+            self.fully_connected.append(nn.Dropout(0.5))
+        self.fully_connected.append(nn.Linear(input_size, d_output))
+        self.fully_connected.append(nn.GELU())
+        for _ in range(n_hidden):
+            self.fully_connected.append(nn.Linear(d_hidden, d_hidden))
+            if dropout:
+                self.fully_connected.append(nn.Dropout(0.5))
+            self.fully_connected.append(nn.GELU())
+        self.fully_connected.append(nn.BatchNorm1d(input_size))
+        if dropout:
+            self.fully_connected.append(nn.Dropout(0.5))
+        self.fully_connected.append(nn.Linear(d_hidden, d_output))
+        self.fully_connected = nn.Sequential(*self.fully_connected)
+
+    def forward(self, x):
+        x = self.model(x)
+        x = torch.flatten(x, 1)
+        return self.fully_connected(x)
+
+    def loss(self, y_pred, y):
+        return nn.CrossEntropyLoss()(y_pred, y)
+        
 
 class ClassifierLit(lightning.LightningModule):
     def __init__(self,
+        conv: bool = False,
         d_input: int = 1024,
         d_hidden = None,
+        n_hidden: int = 0,
+        imsize: int = 256,
+        nc: int = 2,
+        nf: int = 64,
         d_output: int = 3,
         lr: float = 5e-5,
         soft: bool = False,
+        dropout: bool = False,
     ):
         super().__init__()
         if d_hidden is None:
             d_hidden = d_input
         self.save_hyperparameters()
-        self.model = Classifier(d_input, d_hidden, d_output)
-        self.d_input = d_input
-        self.d_output = d_output
+        if conv:
+            self.model = ConvClassifier(imsize=imsize, nc=nc, nf=nf, d_hidden=d_hidden, n_hidden=n_hidden, d_output=d_output, dropout=dropout)
+        else:
+            self.model = Classifier(d_input=d_input, d_hidden=d_hidden, n_hidden=n_hidden, d_output=d_output, dropout=dropout)
+        self.model = torch.compile(self.model)
         self.lr = lr
         self.train_preds, self.val_preds, self.test_preds = [], [], []
         self.train_labels, self.val_labels, self.test_labels = [], [], []
@@ -59,28 +130,33 @@ class ClassifierLit(lightning.LightningModule):
 
     def __shared_step(self, batch, batch_idx, stage):
         x, y = batch
-        if not self.soft:
-            y = torch.argmax(y, dim=-1)
         y_pred = self(x)
+        # y = torch.argmax(y, dim=-1) if not self.soft else nn.Softmax(dim=-1)(y)
+        y = torch.argmax(y, dim=-1) if not self.soft else (y / torch.sum(y, dim=-1, keepdim=True))
         loss = self.model.loss(y_pred, y)
-        preds = torch.argmax(y_pred, dim=-1).cpu().numpy()
-        labels = torch.argmax(y, dim=-1).cpu().numpy() if self.soft else y.cpu().numpy()
-        self.log(f"{stage}/loss", loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        preds = torch.argmax(y_pred, dim=-1)
+        labels = torch.argmax(y, dim=-1) if self.soft else y
+        preds, labels = preds.cpu().numpy(), labels.cpu().numpy()
+        self.log(f"{stage}/loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         return loss, preds, labels
     
     def __on_shared_epoch_end(self, preds, labels, stage):
         plt.clf()
+        classes = ["G1", "S", "G2"]
         preds, labels = np.concatenate(preds), np.concatenate(labels)
         cm = confusion_matrix(labels, preds)
         ax = sns.heatmap(cm.astype(np.int32), annot=True, fmt="d", vmin=0, vmax=len(labels))
         ax.set_xlabel("Predicted")
-        ax.xaxis.set_ticklabels(["G1", "S", "G2"])
+        ax.xaxis.set_ticklabels(classes)
         ax.set_ylabel("True")
-        ax.yaxis.set_ticklabels(["G1", "S", "G2"])
+        ax.yaxis.set_ticklabels(classes)
         fig = ax.get_figure()
         self.logger.experiment.log({
             f"{stage}/cm": wandb.Image(fig),
         })
+
+        for i, class_name in enumerate(classes):
+            self.log(f"{stage}/accuracy_{class_name}", cm[i, i] / np.sum(cm[i]), on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
 
     def training_step(self, batch, batch_idx):
         loss, preds, labels = self.__shared_step(batch, batch_idx, "train")
