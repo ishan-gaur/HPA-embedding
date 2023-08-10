@@ -72,20 +72,25 @@ class ConvClassifier(nn.Module):
 
         input_size = nf * (imsize // 2**self.num_down)**2 
         self.fully_connected = nn.ModuleList()
+
         self.fully_connected.append(nn.BatchNorm1d(input_size))
         if dropout:
             self.fully_connected.append(nn.Dropout(0.5))
-        self.fully_connected.append(nn.Linear(input_size, d_output))
+        self.fully_connected.append(nn.Linear(input_size, d_hidden))
         self.fully_connected.append(nn.GELU())
+
         for _ in range(n_hidden):
-            self.fully_connected.append(nn.Linear(d_hidden, d_hidden))
+            self.fully_connected.append(nn.BatchNorm1d(d_hidden))
             if dropout:
                 self.fully_connected.append(nn.Dropout(0.5))
+            self.fully_connected.append(nn.Linear(d_hidden, d_hidden))
             self.fully_connected.append(nn.GELU())
-        self.fully_connected.append(nn.BatchNorm1d(input_size))
+
+        self.fully_connected.append(nn.BatchNorm1d(d_hidden))
         if dropout:
             self.fully_connected.append(nn.Dropout(0.5))
         self.fully_connected.append(nn.Linear(d_hidden, d_output))
+
         self.fully_connected = nn.Sequential(*self.fully_connected)
 
     def forward(self, x):
@@ -143,7 +148,12 @@ class ClassifierLit(lightning.LightningModule):
     
     def __on_shared_epoch_end(self, preds, labels, stage):
         plt.clf()
-        classes = ["G1", "S", "G2"] if self.num_classes == 3 else ["Stop-G1", "G1", "G1-S", "S-G2", "G2", "G2-M"]
+        if self.num_classes == 3:
+            classes = ["G1", "S", "G2"]
+        elif self.num_classes == 6:
+            classes = ["Stop-G1", "G1", "G1-S", "S-G2", "G2", "G2-M"]
+        elif self.num_classes == 4:
+            classes = ["M/G1", "G1", "S", "G2/M"]
         preds, labels = np.concatenate(preds), np.concatenate(labels)
         cm = confusion_matrix(labels, preds)
         # ax = sns.heatmap(cm.astype(np.int32), annot=True, fmt="d", vmin=0, vmax=len(labels))

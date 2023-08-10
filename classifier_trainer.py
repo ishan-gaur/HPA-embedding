@@ -43,22 +43,23 @@ if args.checkpoint is not None:
 ##########################################################################################
 config = {
     "batch_size": 32,
-    "devices": [4],
+    "devices": [1],
     "num_workers": 1,
     "split": (0.64, 0.16, 0.2),
-    "conv": False,
+    "conv": True,
     "lr": 1e-4,
     "epochs": args.epochs,
     "soft": False,
     "nf": 4,
-    "n_hidden": 1,
-    "d_hidden": DINO.CLS_DIM * 4,
+    "n_hidden": 3,
+    "d_hidden": DINO.CLS_DIM * 2,
     # "dropout": (0.8, 0.5, 0.2)
-    "dropout": True,
+    "dropout": False,
     "ward": True,
+    "num_classes": 4
 }
 
-NUM_CHANNELS, PT_CLASSES = 2, 3 if not config["ward"] else 6
+NUM_CHANNELS, NUM_CLASSES = 2, config["num_classes"]
 
 def print_with_time(msg):
     print(f"[{time.strftime('%m/%d/%Y @ %H:%M')}] {msg}")
@@ -97,18 +98,20 @@ latest_checkpoint_callback = ModelCheckpoint(dirpath=lightning_dir, save_last=Tr
 
 print_with_time("Setting up data module...")
 if not config["conv"]:
-    dm = CellCycleModule(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"], ward=config["ward"])
-    model = ClassifierLit(d_input=DINO.CLS_DIM, d_output=PT_CLASSES, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
+    dm = CellCycleModule(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"],
+                         ward=config["ward"], num_classes=NUM_CLASSES)
+    model = ClassifierLit(d_input=DINO.CLS_DIM, d_output=NUM_CLASSES, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
                           dropout=config["dropout"], lr=config["lr"], soft=config["soft"])
 else:
-    dm = RefChannelCellCycle(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"], ward=config["ward"])
+    dm = RefChannelCellCycle(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"],
+                             ward=config["ward"], num_classes=NUM_CLASSES)
     args.data = Path(args.data)
     if not args.data.is_absolute():
         args.data = Path.cwd() / args.data
     config_file = args.data / args.name
     sys.path.append(str(config_file.parent))
     dataset_config = import_module(str(config_file.stem))
-    model = ClassifierLit(conv=True, imsize=dataset_config.output_image_size, nc=NUM_CHANNELS, nf=config["nf"], d_output=PT_CLASSES,
+    model = ClassifierLit(conv=True, imsize=dataset_config.output_image_size, nc=NUM_CHANNELS, nf=config["nf"], d_output=NUM_CLASSES,
                           dropout=config["dropout"], lr=config["lr"], soft=config["soft"])
 
 wandb_logger.watch(model, log="all", log_freq=10)
