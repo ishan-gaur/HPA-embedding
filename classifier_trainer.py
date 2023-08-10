@@ -43,18 +43,18 @@ if args.checkpoint is not None:
 ##########################################################################################
 config = {
     "batch_size": 32,
-    "devices": [1],
+    "devices": [3],
     "num_workers": 1,
     "split": (0.64, 0.16, 0.2),
-    "conv": True,
+    "conv": False,
     "lr": 1e-4,
     "epochs": args.epochs,
     "soft": False,
     "nf": 4,
     "n_hidden": 3,
-    "d_hidden": DINO.CLS_DIM * 2,
+    "d_hidden": DINO.CLS_DIM * 4,
     # "dropout": (0.8, 0.5, 0.2)
-    "dropout": False,
+    "dropout": True,
     "ward": True,
     "num_classes": 4
 }
