@@ -124,6 +124,7 @@ class ClassifierLit(lightning.LightningModule):
         self.train_preds, self.val_preds, self.test_preds = [], [], []
         self.train_labels, self.val_labels, self.test_labels = [], [], []
         self.soft = soft
+        self.num_classes = d_output
 
     def forward(self, x):
         return self.model(x)
@@ -142,10 +143,11 @@ class ClassifierLit(lightning.LightningModule):
     
     def __on_shared_epoch_end(self, preds, labels, stage):
         plt.clf()
-        classes = ["G1", "S", "G2"]
+        classes = ["G1", "S", "G2"] if self.num_classes == 3 else ["Stop-G1", "G1", "G1-S", "S-G2", "G2", "G2-M"]
         preds, labels = np.concatenate(preds), np.concatenate(labels)
         cm = confusion_matrix(labels, preds)
-        ax = sns.heatmap(cm.astype(np.int32), annot=True, fmt="d", vmin=0, vmax=len(labels))
+        # ax = sns.heatmap(cm.astype(np.int32), annot=True, fmt="d", vmin=0, vmax=len(labels))
+        ax = sns.heatmap(cm.astype(np.int32), annot=True, fmt="d", vmin=0, vmax=len(labels) / 3)
         ax.set_xlabel("Predicted")
         ax.xaxis.set_ticklabels(classes)
         ax.set_ylabel("True")

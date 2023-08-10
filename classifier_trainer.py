@@ -55,15 +55,18 @@ config = {
     "d_hidden": DINO.CLS_DIM * 4,
     # "dropout": (0.8, 0.5, 0.2)
     "dropout": True,
+    "ward": True,
 }
 
-NUM_CHANNELS, GMM_CLASSES = 2, 3
+NUM_CHANNELS, PT_CLASSES = 2, 3 if not config["ward"] else 6
 
 def print_with_time(msg):
     print(f"[{time.strftime('%m/%d/%Y @ %H:%M')}] {msg}")
 
 fucci_path = Path(args.data)
 project_name = f"FUCCI_conv_classifier" if config["conv"] else f"FUCCI_dino_classifier"
+if config["ward"]:
+    project_name += "_ward"
 log_folder = Path(f"/data/ishang/fucci_vae/{project_name}_{args.run}")
 if not log_folder.exists():
     os.makedirs(log_folder, exist_ok=True)
@@ -94,19 +97,19 @@ latest_checkpoint_callback = ModelCheckpoint(dirpath=lightning_dir, save_last=Tr
 
 print_with_time("Setting up data module...")
 if not config["conv"]:
-    dm = CellCycleModule(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"])
-    model = ClassifierLit(d_input=DINO.CLS_DIM, d_output=3, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
-                          dropout=config["dropout"], lr=config["lr"], soft=config["soft"]) # 3 components in the GMM output
+    dm = CellCycleModule(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"], ward=config["ward"])
+    model = ClassifierLit(d_input=DINO.CLS_DIM, d_output=PT_CLASSES, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
+                          dropout=config["dropout"], lr=config["lr"], soft=config["soft"])
 else:
-    dm = RefChannelCellCycle(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"])
+    dm = RefChannelCellCycle(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"], ward=config["ward"])
     args.data = Path(args.data)
     if not args.data.is_absolute():
         args.data = Path.cwd() / args.data
     config_file = args.data / args.name
     sys.path.append(str(config_file.parent))
     dataset_config = import_module(str(config_file.stem))
-    model = ClassifierLit(conv=True, imsize=dataset_config.output_image_size, nc=NUM_CHANNELS, nf=config["nf"], d_output=GMM_CLASSES,
-                          dropout=config["dropout"], lr=config["lr"], soft=config["soft"]) # 3 components in the GMM output
+    model = ClassifierLit(conv=True, imsize=dataset_config.output_image_size, nc=NUM_CHANNELS, nf=config["nf"], d_output=PT_CLASSES,
+                          dropout=config["dropout"], lr=config["lr"], soft=config["soft"])
 
 wandb_logger.watch(model, log="all", log_freq=10)
 
