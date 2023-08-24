@@ -60,13 +60,12 @@ class ConvClassifier(nn.Module):
         if dropout:
             self.model.append(nn.Dropout(0.8))
         self.model.append(nn.Conv2d(nc, nf, 4, 2, 1))
-        self.model.append(nn.LeakyReLU(0.2, inplace=True))
         for _ in range(self.num_down - 1):
+            self.model.append(nn.GELU())
+            self.model.append(nn.BatchNorm2d(nf))
             if dropout:
                 self.model.append(nn.Dropout(0.8))
             self.model.append(nn.Conv2d(nf, nf*2, 4, 2, 1))
-            self.model.append(nn.LeakyReLU(0.2, inplace=True))
-            # self.model.append(nn.BatchNorm2d(nf*2))
             nf *= 2
         self.model = nn.Sequential(*self.model)
 
@@ -94,8 +93,11 @@ class ConvClassifier(nn.Module):
         self.fully_connected = nn.Sequential(*self.fully_connected)
 
     def forward(self, x):
+        # print(x.shape)
         x = self.model(x)
+        # print(x.shape)
         x = torch.flatten(x, 1)
+        # print(x.shape)
         return self.fully_connected(x)
 
     def loss(self, y_pred, y):
