@@ -1,7 +1,6 @@
 import sys
 import inspect
 import argparse
-import config
 import pickle
 from pathlib import Path
 from importlib import import_module
@@ -37,7 +36,8 @@ NORM, PIX_RANGE, INT_IMG, SAMPLE, SHARP, NAME = 0, 1, 2, 3, 4, 5
 parser = argparse.ArgumentParser(description='Dataset preprocessing pipline')
 parser.add_argument('--data_dir', type=str, help='Path to dataset, should be absolute path', required=True)
 parser.add_argument('--output_dir', type=str , help='Path to output directory, should be absolute path')
-parser.add_argument('--name', type=str, help='Name of dataset', default='unspecified')
+parser.add_argument('--config', type=str, help='Path to config file, should be absolute path')
+parser.add_argument('--name', type=str, help='Name of dataset version to look up in dataset folder (used for cached results)', default='unspecified')
 parser.add_argument('--stats', type=str, help=f"Image stats to show, options include: {stats_opt}\n{stats_desc}", choices=stats_opt)
 parser.add_argument('--viz_num', type=int, default=5, help='Number of samples to show')
 parser.add_argument('--calc_num', type=int, default=30, help='Number of samples to use for calculating image stats')
@@ -56,17 +56,35 @@ parser.add_argument('--rebuild', action='store_true', help='Rebuild specifed ste
 
 args = parser.parse_args()
 
+#===================================================================================================
+# Basic Setup
+#===================================================================================================
 DATA_DIR = Path(args.data_dir)
-# if relative path is given, make it absolute
 if not DATA_DIR.is_absolute():
     DATA_DIR = Path.cwd() / DATA_DIR
     print(f"Converted relative path to absolute path: {DATA_DIR}")
+if not DATA_DIR.exists():
+    raise ValueError(f"Data directory {DATA_DIR} does not exist")
 
 OUTPUT_DIR = Path(args.output_dir) if args.output_dir is not None else Path.cwd() / "output"
 if not OUTPUT_DIR.exists():
     OUTPUT_DIR.mkdir(parents=True)
     print(f"Created output directory {OUTPUT_DIR}")
 
+args.config = Path(args.config)
+if not args.config.is_absolute():
+    args.config = Path.cwd() / args.config
+if not args.config.exists():
+    raise ValueError(f"Config file {args.config} does not exist")
+sys.path.append(str(args.config.parent))
+config = import_module(str(args.config.stem))
+
+device = f"cuda:{args.device}" if torch.cuda.is_available() else "cpu"
+print(f"Using device {device}")
+
+#===================================================================================================
+# Set up paths for data and results
+#===================================================================================================
 no_name = (args.name == 'unspecified')
 BASE_INDEX = DATA_DIR / "index.csv"
 NORM_SUFFIX = f"_{config.norm_strategy}{f'_{config.norm_min}_{config.norm_max}' if config.norm_strategy in ['threshold', 'percentile'] else ''}"
@@ -90,10 +108,9 @@ if config.channels is None:
     save_channel_names(DATA_DIR, CHANNELS)
 DAPI, TUBL, CALB2 = config.dapi, config.tubl, config.calb2
 
-device = f"cuda:{args.device}" if torch.cuda.is_available() else "cpu"
-print(f"Using device {device}")
-
-
+#===================================================================================================
+# Implementation of Pipeline Steps
+#===================================================================================================
 if args.stats is not None:
     if args.stats == stats_opt[NAME]:
         # find all files like index_{name}.csv and print name
