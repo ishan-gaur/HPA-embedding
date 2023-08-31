@@ -40,17 +40,17 @@ if args.checkpoint is not None:
 ##########################################################################################
 config = {
     "batch_size": 32,
-    "devices": [7],
+    "devices": [4, 5, 6, 7],
     "num_workers": 1,
     "split": (0.64, 0.16, 0.2),
     "conv": False,
     "lr": 1e-4,
     "epochs": args.epochs,
     "nf": 16,
-    "n_hidden": 0,
+    "n_hidden": 3,
     "d_hidden": DINO.CLS_DIM * 12,
     "dropout": False,
-    "batchnorm": False,
+    "batchnorm": True,
     "num_classes": 2
 }
 

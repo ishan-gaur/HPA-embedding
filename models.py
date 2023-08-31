@@ -295,8 +295,8 @@ class Regressor(nn.Module):
 
     def build_model(self, d_input, d_hidden, n_hidden, d_output, dropout, batchnorm):
         # input layer
-        if dropout:
-            self.model.append(nn.Dropout(0.8))
+        # if dropout:
+        #     self.model.append(nn.Dropout(0.5))
         self.model.append(nn.Linear(d_input, d_hidden))
         self.model.append(nn.GELU())
 
@@ -331,6 +331,7 @@ class RegressorLit(lightning.LightningModule):
     - MSE loss
     - KDEplot of predicted intensities
     - Heatmap of residuals across the output space
+    TODO:
     - Intensity residuals over the DINO embedding NMF components
     """
     def __init__(self,
@@ -355,7 +356,7 @@ class RegressorLit(lightning.LightningModule):
         #     self.model = ConvClassifier(imsize=imsize, nc=nc, nf=nf, d_hidden=d_hidden, n_hidden=n_hidden, d_output=d_output, dropout=dropout)
         # else:
         self.model = Regressor(d_input=d_input, d_hidden=d_hidden, n_hidden=n_hidden, d_output=d_output, dropout=dropout, batchnorm=batchnorm)
-        # self.model = torch.compile(self.model)
+        self.model = torch.compile(self.model)
         self.lr = lr
         self.train_preds, self.val_preds, self.test_preds = [], [], []
         self.train_labels, self.val_labels, self.test_labels = [], [], []
@@ -368,7 +369,7 @@ class RegressorLit(lightning.LightningModule):
         x, y = batch
         y_pred = self(x)
         loss = self.model.loss(y_pred, y)
-        preds, labels = y_pred.cpu(), y.cpu()
+        preds, labels = y_pred.detach().cpu(), y.detach().cpu()
         self.log(f"{stage}/loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         return loss, preds, labels
 
@@ -380,42 +381,63 @@ class RegressorLit(lightning.LightningModule):
     
     def __on_shared_epoch_end(self, preds, labels, stage):
         preds, labels = torch.cat(preds), torch.cat(labels)
+    
+        # plot the intensity kdeplot
+        plt.clf()
+        ax = sns.kdeplot(x=preds[:, 0], y=preds[:, 1])
+        self._log_image(stage, "intensity_kde", ax)
+
         # these residuals are 2D, residual for CDT1 and for GMNN
         # we want to make a 2D grid in the label intensity space (also a 2D grid)
         # and color the grid squares by the mix of CDT1 and GMNN intensities defined by the 
         # average residual for all points in that grid square
         # this is a "heatmap" of the residuals across the output space
 
-        preds_color, labels_color = torch.pow(torch.ones_like(preds) * 10, preds), torch.pow(torch.ones_like(labels) * 10, labels)
-        residuals_color = labels_color - preds_color # each is [0, 1]^2
-        residuals_color = (255 / 2 * (1 + residuals_color)) # delta is [-255, 255] and we want to map it to [0, 255]
-        residuals_color = residuals_color.transpose(0, 1)
-        residuals_color = torch.stack([residuals_color[0], residuals_color[1], torch.zeros_like(residuals_color[0])])
-        residuals_color = residuals_color.transpose(0, 1)
-        print(residuals_color.shape)
+        preds_color = torch.pow(torch.ones_like(preds) * 10, preds)
+        # print(preds_color.min(), preds_color.max())
+
+
+        # the actual labels have values that are pretty low, because they're averaged so
+        # we're going to rescale labels accordingly
+        # by the preds min/max values and then clip before remapping to 0-255
+        labels_color = torch.pow(torch.ones_like(labels) * 10, labels)
+        # print(labels_color.min(), labels_color.max())
+        preds_color = (preds_color - labels_color.min()) / (labels_color.max() - labels_color.min())
+        # print(preds_color.min(), preds_color.max())
+
+        preds_color = preds_color.transpose(0, 1)
+        preds_color = torch.stack([preds_color[0], preds_color[1], torch.zeros_like(preds_color[0])])
+        preds_color = preds_color.transpose(0, 1)
+        # print(preds_color.min(), preds_color.max())
 
         # get the grid
         grid_size = 10
-        grid_x = torch.linspace(labels[:, 0].min(), labels[:, 0].max(), grid_size)
+        grid_x = torch.linspace(labels[:, 0].max(), labels[:, 0].min(), grid_size)
         grid_y = torch.linspace(labels[:, 1].min(), labels[:, 1].max(), grid_size)
         grid_x, grid_y = torch.meshgrid(grid_x, grid_y)
         grid = torch.stack([grid_x, grid_y], dim=-1).reshape(-1, 2)
 
         # get the average residual for each grid square
-        grid_residuals = torch.zeros_like(grid)
+        grid_residuals = torch.zeros([grid.shape[0], 3])
         for i, point in enumerate(grid):
             # get the points in the grid square
             x_min, x_max = point[0] - 0.5, point[0] + 0.5
             y_min, y_max = point[1] - 0.5, point[1] + 0.5
             mask = (labels[:, 0] >= x_min) & (labels[:, 0] < x_max) & (labels[:, 1] >= y_min) & (labels[:, 1] < y_max)
-            grid_residuals[i] = torch.mean(residuals_color[mask])
-        grid_residuals = grid_residuals.int()
+            if mask.sum() == 0:
+                grid_residuals[i] = torch.ones_like(grid_residuals[i])
+            else:
+                grid_residuals[i] = torch.mean(preds_color[mask], dim=0)
+        grid_residuals = grid_residuals.reshape(grid_size, grid_size, 3)
+        grid_residuals = torch.clamp(grid_residuals, 0, 1) * 255
+        # print(grid_residuals.min(), grid_residuals.max())
+        # print(grid_residuals.shape)
 
         # plot the heatmap
         plt.clf()
         ax = plt.gca()
-        ax.imshow(grid_residuals)
-        self._log_image(stage, "residuals_heatmap", ax)
+        ax.imshow(grid_residuals.int())
+        self._log_image(stage, "prediction_map", ax)
 
     def training_step(self, batch, batch_idx):
         loss, preds, labels = self.__shared_step(batch, batch_idx, "train")
