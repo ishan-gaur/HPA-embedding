@@ -167,18 +167,6 @@ if args.image_mask_cache or args.all:
         create_data_path_index(image_paths, cell_mask_paths, nuclei_mask_paths, BASE_INDEX, overwrite=True)
         save_channel_names(DATA_DIR, CHANNELS)
 
-if args.normalize or args.all:
-    print("Normalizing images")
-    if NORM_INDEX.exists() and not args.rebuild:
-        print("Index file already exists, skipping. Set --rebuild to overwrite.")
-    else:
-        assert BASE_INDEX.exists(), "Index file does not exist, run --image_mask_cache first"
-        assert config.norm_strategy is not None, "Normalization strategy not set in config"
-        image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(BASE_INDEX)
-        image_paths, _, _ = load_index_paths(BASE_INDEX)
-        norm_paths = normalize_images(image_paths, config.norm_strategy, NORM_SUFFIX, batch_size=100 if config.grouping == -1 else 1)
-        create_data_path_index(norm_paths, cell_mask_paths, nuclei_mask_paths, NORM_INDEX, overwrite=True)
-
 if args.clean_masks or args.all:
     print("Cleaning masks")
     assert BASE_INDEX.exists(), "Index file does not exist, run --image_mask_cache first"
@@ -212,6 +200,18 @@ if args.single_cell or args.all:
             f.write(inspect.getsource(config))
 
         dataset_config = config
+
+if args.normalize or args.all:
+    print("Normalizing images")
+    if NORM_INDEX.exists() and not args.rebuild:
+        print("Index file already exists, skipping. Set --rebuild to overwrite.")
+    else:
+        assert BASE_INDEX.exists(), "Index file does not exist, run --image_mask_cache first"
+        assert config.norm_strategy is not None, "Normalization strategy not set in config"
+        image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(BASE_INDEX)
+        image_paths, _, _ = load_index_paths(BASE_INDEX)
+        norm_paths = normalize_images(image_paths, config.norm_strategy, NORM_SUFFIX, batch_size=100 if config.grouping == -1 else 1)
+        create_data_path_index(norm_paths, cell_mask_paths, nuclei_mask_paths, NORM_INDEX, overwrite=True)
 
 if args.rgb or args.all:
     from data import CellImageDataset, SimpleDataset

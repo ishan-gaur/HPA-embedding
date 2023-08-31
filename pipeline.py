@@ -278,12 +278,12 @@ def clear_border(cell_mask, nuclei_mask):
 
     num_removed = 0
     cleared_nuclei_mask = segmentation.clear_border(nuclei_mask)
-    keep_value = np.unique(cleared_nuclei_mask)
-    bordering_cells = np.isin(cell_mask, keep_value)
-    cleared_cell_mask = cell_mask * bordering_cells
-    num_removed = len(np.unique(nuclei_mask)) - len(keep_value)
+    kept_values = np.unique(cleared_nuclei_mask)
+    kept_cells = np.isin(cell_mask, kept_values)
+    cleared_cell_mask = cell_mask * kept_cells
+    num_removed = len(np.unique(nuclei_mask)) - len(kept_values)
     if num_removed == np.max(nuclei_mask):
-        assert np.max(keep_value) == 0, f"Something went wrong with clearing the border, num_removed is the same as the highest index mask in nuclei mask, but the keep_value {np.max(keep_value)} != 0"
+        assert np.max(kept_values) == 0, f"Something went wrong with clearing the border, num_removed is the same as the highest index mask in nuclei mask, but the keep_value {np.max(kept_values)} != 0"
     nuclei_mask = cleared_nuclei_mask
     cell_mask = cleared_cell_mask
 
@@ -382,10 +382,15 @@ def clean_and_save_masks(
         cell_mask = np.load(cell_mask_path).squeeze()
         nuclei_mask = np.load(nuclei_mask_path).squeeze()
         assert set(np.unique(nuclei_mask)) == set(np.unique(cell_mask)), f"Mask mismatch before cleaning, nuclei: {np.unique(nuclei_mask)}, cell: {np.unique(cell_mask)}"
-        num_original += len(np.unique(nuclei_mask))
+        for i in range(len(nuclei_mask)):
+            num_original += len(np.unique(nuclei_mask[i]))
         if rm_border:
-            cell_mask, nuclei_mask, n_removed = clear_border(cell_mask, nuclei_mask)
-            num_removed += n_removed
+            for i in range(len(cell_mask)):
+                num_start = np.array([len(np.unique(cell_mask[i])), len(np.unique(nuclei_mask[i]))])
+                cell_mask[i], nuclei_mask[i], n_removed = clear_border(cell_mask[i], nuclei_mask[i])
+                num_removed += n_removed
+                num_end = np.array([len(np.unique(cell_mask[i])), len(np.unique(nuclei_mask[i]))])
+                assert np.all(num_start - num_end >= n_removed), f"Something went wrong with clearing the border, num_start {num_start} - num_end {num_end} < 0"
         if remove_size > 0:
             cell_mask, nuclei_mask, n_removed = remove_small_objects(cell_mask, nuclei_mask, min_size=remove_size)
             num_removed += n_removed

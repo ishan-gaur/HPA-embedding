@@ -20,12 +20,12 @@
             "console": "integratedTerminal",
             "args": [
                 "--data_dir", "dev-dataset-wells",
-                // "--image_mask_cache",
-                "--normalize",
-                // "--clean_masks",
+                "--image_mask_cache",
+                "--clean_masks",
                 // "--single_cell",
+                // "--normalize",
                 "--config", "FUCCI_well_config.py",
-                // "--name", "well_min_max_512_crop_sharpness_008",
+                "--name", "well_min_max_512_crop_sharpness_008",
                 "--rebuild"
             ],
         },
