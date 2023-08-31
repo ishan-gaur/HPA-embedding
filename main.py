@@ -1,7 +1,6 @@
 import sys
 import inspect
 import argparse
-import config
 import pickle
 from pathlib import Path
 from importlib import import_module
@@ -12,8 +11,6 @@ import pipeline
 from pipeline import create_image_paths_file, image_paths_from_folders, create_data_path_index, load_index_paths, load_channel_names, save_channel_names
 from pipeline import segmentator_setup, get_masks, normalize_images, clean_and_save_masks, crop_images, resize, filter_by_sharpness
 from stats import pixel_range_info, normalization_dry_run, image_by_level_set, sample_sharpness, sharpness_dry_run
-from data import CellImageDataset, SimpleDataset
-from sklearn.mixture import GaussianMixture
 import seaborn as sns
 import matplotlib.pyplot as plt
 
@@ -39,7 +36,8 @@ NORM, PIX_RANGE, INT_IMG, SAMPLE, SHARP, NAME = 0, 1, 2, 3, 4, 5
 parser = argparse.ArgumentParser(description='Dataset preprocessing pipline')
 parser.add_argument('--data_dir', type=str, help='Path to dataset, should be absolute path', required=True)
 parser.add_argument('--output_dir', type=str , help='Path to output directory, should be absolute path')
-parser.add_argument('--name', type=str, help='Name of dataset', default='unspecified')
+parser.add_argument('--config', type=str, help='Path to config file, should be absolute path')
+parser.add_argument('--name', type=str, help='Name of dataset version to look up in dataset folder (used for cached results)', default='unspecified')
 parser.add_argument('--stats', type=str, help=f"Image stats to show, options include: {stats_opt}\n{stats_desc}", choices=stats_opt)
 parser.add_argument('--viz_num', type=int, default=5, help='Number of samples to show')
 parser.add_argument('--calc_num', type=int, default=30, help='Number of samples to use for calculating image stats')
@@ -58,17 +56,35 @@ parser.add_argument('--rebuild', action='store_true', help='Rebuild specifed ste
 
 args = parser.parse_args()
 
+#===================================================================================================
+# Basic Setup
+#===================================================================================================
 DATA_DIR = Path(args.data_dir)
-# if relative path is given, make it absolute
 if not DATA_DIR.is_absolute():
     DATA_DIR = Path.cwd() / DATA_DIR
     print(f"Converted relative path to absolute path: {DATA_DIR}")
+if not DATA_DIR.exists():
+    raise ValueError(f"Data directory {DATA_DIR} does not exist")
 
 OUTPUT_DIR = Path(args.output_dir) if args.output_dir is not None else Path.cwd() / "output"
 if not OUTPUT_DIR.exists():
     OUTPUT_DIR.mkdir(parents=True)
     print(f"Created output directory {OUTPUT_DIR}")
 
+args.config = Path(args.config)
+if not args.config.is_absolute():
+    args.config = Path.cwd() / args.config
+if not args.config.exists():
+    raise ValueError(f"Config file {args.config} does not exist")
+sys.path.append(str(args.config.parent))
+config = import_module(str(args.config.stem))
+
+device = f"cuda:{args.device}" if torch.cuda.is_available() else "cpu"
+print(f"Using device {device}")
+
+#===================================================================================================
+# Set up paths for data and results
+#===================================================================================================
 no_name = (args.name == 'unspecified')
 BASE_INDEX = DATA_DIR / "index.csv"
 NORM_SUFFIX = f"_{config.norm_strategy}{f'_{config.norm_min}_{config.norm_max}' if config.norm_strategy in ['threshold', 'percentile'] else ''}"
@@ -92,10 +108,9 @@ if config.channels is None:
     save_channel_names(DATA_DIR, CHANNELS)
 DAPI, TUBL, CALB2 = config.dapi, config.tubl, config.calb2
 
-device = f"cuda:{args.device}" if torch.cuda.is_available() else "cpu"
-print(f"Using device {device}")
-
-
+#===================================================================================================
+# Implementation of Pipeline Steps
+#===================================================================================================
 if args.stats is not None:
     if args.stats == stats_opt[NAME]:
         # find all files like index_{name}.csv and print name
@@ -103,12 +118,12 @@ if args.stats is not None:
         for file in DATA_DIR.glob("index_*.csv"):
             print(f"{file.stem[6:]}")
 
-    data_paths_file, num_paths = create_image_paths_file(DATA_DIR)
+    data_paths_file, num_paths = create_image_paths_file(DATA_DIR, level=config.grouping)
     image_paths = image_paths_from_folders(data_paths_file)
     if args.stats == stats_opt[PIX_RANGE]:
         pixel_range_info(args, image_paths, CHANNELS, OUTPUT_DIR)
     if args.stats == stats_opt[NORM]:
-        normalization_dry_run(args, config, image_paths, CHANNELS, OUTPUT_DIR, device, channel_slice=slice(2, None))
+        normalization_dry_run(args, config, image_paths, CHANNELS, OUTPUT_DIR, device)
     if args.stats == stats_opt[INT_IMG]:
         image_by_level_set(args, image_paths, CHANNELS, OUTPUT_DIR)
     if args.stats == stats_opt[SAMPLE]:
@@ -140,15 +155,17 @@ if args.stats is not None:
 
 if args.image_mask_cache or args.all:
     print("Caching composite images and getting segmentation masks")
-    data_paths_file, num_paths = create_image_paths_file(DATA_DIR, overwrite=args.rebuild)
+    data_paths_file, num_paths = create_image_paths_file(DATA_DIR, level=config.grouping, overwrite=args.rebuild)
     image_paths = image_paths_from_folders(data_paths_file)
     if BASE_INDEX.exists() and not args.rebuild:
         print("Index file already exists, skipping. Set --rebuild to overwrite.")
+        save_channel_names(DATA_DIR, CHANNELS)
     else:
         multi_channel_model = True if CALB2 is not None else False
         segmentator = segmentator_setup(multi_channel_model, device)
         image_paths, nuclei_mask_paths, cell_mask_paths = get_masks(segmentator, image_paths, CHANNELS, DAPI, TUBL, CALB2, rebuild=args.rebuild)
         create_data_path_index(image_paths, cell_mask_paths, nuclei_mask_paths, BASE_INDEX, overwrite=True)
+        save_channel_names(DATA_DIR, CHANNELS)
 
 if args.normalize or args.all:
     print("Normalizing images")
@@ -159,7 +176,7 @@ if args.normalize or args.all:
         assert config.norm_strategy is not None, "Normalization strategy not set in config"
         image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(BASE_INDEX)
         image_paths, _, _ = load_index_paths(BASE_INDEX)
-        norm_paths = normalize_images(image_paths, config.norm_strategy, NORM_SUFFIX)
+        norm_paths = normalize_images(image_paths, config.norm_strategy, NORM_SUFFIX, batch_size=100 if config.grouping == -1 else 1)
         create_data_path_index(norm_paths, cell_mask_paths, nuclei_mask_paths, NORM_INDEX, overwrite=True)
 
 if args.clean_masks or args.all:
@@ -197,6 +214,7 @@ if args.single_cell or args.all:
         dataset_config = config
 
 if args.rgb or args.all:
+    from data import CellImageDataset, SimpleDataset
     assert not no_name, "Name of dataset must be specified"
     assert dataset_config is not None, "Dataset config file must be specified via name, this means that the config for this data doesn't exist or doesn't make the provided name"
     if SimpleDataset.has_cache_files(RGB_DATASET) and not args.rebuild:
@@ -210,6 +228,7 @@ if args.rgb or args.all:
         rgb_dataset.save(RGB_DATASET)
 
 if args.dino_cls or args.dino_cls_ref or args.all:
+    from data import CellImageDataset, SimpleDataset
     from models import DINO
     assert not (args.dino_cls and args.dino_cls_ref), "Cannot run both DINO classification and DINO classification with reference at the same time, please run separately."
     assert not no_name, "Name of dataset must be specified"
@@ -250,6 +269,8 @@ if args.dino_cls or args.dino_cls_ref or args.all:
 
 
 if args.fucci_gmm or args.all:
+    from sklearn.mixture import GaussianMixture
+    from data import CellImageDataset, SimpleDataset
     assert not no_name, "Name of dataset must be specified"
     assert NAME_INDEX.exists(), "Index file for single cell images does not exist, run --single_cell first"
     if GMM_PROBS.exists() and not args.rebuild:

@@ -13,6 +13,23 @@
             "justMyCode": true
         },
         {
+            "name": "DEBUG: image processing pipeline wells",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--data_dir", "dev-dataset-wells",
+                // "--image_mask_cache",
+                "--normalize",
+                // "--clean_masks",
+                // "--single_cell",
+                "--config", "FUCCI_well_config.py",
+                // "--name", "well_min_max_512_crop_sharpness_008",
+                "--rebuild"
+            ],
+        },
+        {
             "name": "DEBUG: norm visualization",
             "type": "python",
             "request": "launch",

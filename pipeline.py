@@ -32,7 +32,7 @@ def load_channel_names(data_dir):
         channel_names = f.read().splitlines()
     return channel_names
 
-def create_image_paths_file(data_dir, exists_ok=True, overwrite=False):
+def create_image_paths_file(data_dir, level, exists_ok=True, overwrite=False):
     if type(data_dir) == Path:
         data_dir = str(data_dir)
     data_paths_file = data_dir / "data-folder.txt"
@@ -45,12 +45,18 @@ def create_image_paths_file(data_dir, exists_ok=True, overwrite=False):
             os.remove(data_paths_file)
         else:
             print(f"Image path index found at: {data_paths_file}")
+
     if not os.path.exists(data_paths_file) or overwrite:
-        bash_create_index = f"find \"{data_dir}\" -type d > \"{data_paths_file}\""
-        bash_remove_top_line = f"sed -i '1d' \"{data_paths_file}\""
-        subprocess.run(bash_create_index, shell=True)
-        subprocess.run(bash_remove_top_line, shell=True)
-        print("Image path index created at:", data_paths_file)
+        print(f"Creating image path index at: {data_paths_file}")
+        if level == -1:
+            # find max depth of the directory
+            print("WARNING: depth -1 is not tested, use at your own risk")
+            p = subprocess.run(f"find {data_dir} -type d | awk -F/ '{{print NF-1}}' | sort -nu | tail -n 1", shell=True, capture_output=True)
+            level = int(p.stdout.decode("utf-8").strip())
+        p = subprocess.run(f"find {data_dir} -mindepth {level} -maxdepth {level} -type d", shell=True, capture_output=True)
+        with open(data_paths_file, "w+") as f:
+            f.write(p.stdout.decode("utf-8"))
+    
     p = subprocess.run(f"cat {data_paths_file} | wc -l", shell=True, capture_output=True)
     num_paths = int(p.stdout.decode("utf-8").strip())
     print(f"Number of target paths found: {num_paths}")
@@ -249,8 +255,9 @@ def _get_masks(segmentator, image_paths, channel_names, dapi, tubl, calb2, merge
                     if display:
                         microshow(nuclei_mask, label_text=f"Nuclei mask after merging: {np.unique(nuclei_mask)}")
 
-        assert np.max(nuclei_masks) > 0 and np.max(cell_masks) > 0, f"No nuclei or cell mask found for {image_path}"
-        assert set(np.unique(nuclei_masks)) == set(np.unique(cell_masks)), f"Mask mismatch for {image_path}, nuclei: {np.unique(nuclei_masks)}, cell: {np.unique(cell_masks)}"
+        for i, (nuclei_mask, cell_mask) in enumerate(zip(nuclei_masks, cell_masks)):
+            assert np.max(nuclei_mask) > 0 and np.max(cell_mask) > 0, f"No nuclei or cell mask found for {image_path}"
+            assert set(np.unique(nuclei_mask)) == set(np.unique(cell_mask)), f"Mask mismatch for {image_path}, nuclei: {np.unique(nuclei_mask)}, cell: {np.unique(cell_mask)}"
 
         np.save(image_path / "images.npy", images)
         np.save(image_path / "nuclei_masks.npy", nuclei_masks)
@@ -578,7 +585,6 @@ def normalize_images(image_paths, norm_strategy, norm_suffix=None, batch_size=10
         #     # images = np.expand_dims(images, axis=1)
         # else:
         images = np.concatenate(images, axis=0)
-        # print(images.shape)
 
         if norm_strategy == "min_max":
             images = min_max_normalization(images, stats=False)
@@ -587,7 +593,7 @@ def normalize_images(image_paths, norm_strategy, norm_suffix=None, batch_size=10
 
         for j, path in enumerate(batch_paths):
             if norm_suffix is not None:
-                path = path.parent / (f"{path.stem}_{norm_suffix}" + path.suffix)
+                path = path.parent / (f"{path.stem}{norm_suffix}" + path.suffix)
             np.save(path, images[j])
             paths.append(path)
     return paths

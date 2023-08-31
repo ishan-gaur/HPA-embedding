@@ -22,21 +22,31 @@ def get_image_percentiles(images, percentiles=[90, 99, 99.99], non_zero=True):
     return values, percentiles
 
 def get_min_max_int(images):
-    num_channels = images.shape[1]
+    # images are now C x B x H x W
+    num_channels = images.shape[0]
     if not silent: print("Calculating image min and max")
-    mins = images.min(axis=(2, 3), keepdims=True)
-    maxes = images.max(axis=(2, 3), keepdims=True)
-    if not silent: print("Reshaping images to calculate intensities")
-    intensities = images.transpose(1, 0, 2, 3).reshape(num_channels, -1)
+    mins = images.min(axis=(1, 2, 3), keepdims=True)
+    maxes = images.max(axis=(1, 2, 3), keepdims=True)
+    intensities = images.reshape(num_channels, -1)
     return mins, maxes, intensities
 
-def min_max_normalization(images, stats=True):
+def min_max_normalization(images, stats=True, non_zero=True):
+    # images come in as B x C x H x W
+    images = images.transpose(1, 0, 2, 3)
     mins, maxes, intensities = get_min_max_int(images)
+    if non_zero:
+        min_nonzero = [intensities[channel][intensities[channel] > 0].min() for channel in range(len(intensities))]
+        min_nonzero = np.array(min_nonzero).reshape(mins.shape)
+        mins = min_nonzero
     if not silent: print("Normalizing images")
+    images = np.clip(images, mins, maxes)
     norm_images = (images - mins) / (maxes - mins)
+    # convert norm images back to B x C x H x W
+    norm_images = norm_images.transpose(1, 0, 2, 3)
     norm_images = norm_images.astype(np.float32)
     if not stats:
         return norm_images
+    # intensities for all images for a given channel
     return norm_images, mins, maxes, intensities
 
 def rescale_normalization(images, stats=True):
