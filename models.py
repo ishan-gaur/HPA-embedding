@@ -315,7 +315,7 @@ class Regressor(nn.Module):
         if dropout:
             self.model.append(nn.Dropout(0.2))
         self.model.append(nn.Linear(d_hidden, d_output))
-        self.model.append(nn.ReLU())
+        self.model.append(nn.GELU())
 
     def forward(self, x):
         return -1 * self.model(x)
@@ -380,12 +380,19 @@ class RegressorLit(lightning.LightningModule):
     
     def __on_shared_epoch_end(self, preds, labels, stage):
         preds, labels = torch.cat(preds), torch.cat(labels)
-        residuals = labels - preds
         # these residuals are 2D, residual for CDT1 and for GMNN
         # we want to make a 2D grid in the label intensity space (also a 2D grid)
         # and color the grid squares by the mix of CDT1 and GMNN intensities defined by the 
         # average residual for all points in that grid square
         # this is a "heatmap" of the residuals across the output space
+
+        preds_color, labels_color = torch.pow(torch.ones_like(preds) * 10, preds), torch.pow(torch.ones_like(labels) * 10, labels)
+        residuals_color = labels_color - preds_color # each is [0, 1]^2
+        residuals_color = (255 / 2 * (1 + residuals_color)) # delta is [-255, 255] and we want to map it to [0, 255]
+        residuals_color = residuals_color.transpose(0, 1)
+        residuals_color = torch.stack([residuals_color[0], residuals_color[1], torch.zeros_like(residuals_color[0])])
+        residuals_color = residuals_color.transpose(0, 1)
+        print(residuals_color.shape)
 
         # get the grid
         grid_size = 10
@@ -401,17 +408,8 @@ class RegressorLit(lightning.LightningModule):
             x_min, x_max = point[0] - 0.5, point[0] + 0.5
             y_min, y_max = point[1] - 0.5, point[1] + 0.5
             mask = (labels[:, 0] >= x_min) & (labels[:, 0] < x_max) & (labels[:, 1] >= y_min) & (labels[:, 1] < y_max)
-            grid_residuals[i] = torch.mean(residuals[mask])
-
-        # get the color for each grid square
-        grid_residuals = torch.pow(torch.ones_like(grid_residuals) * 10, grid_residuals)
-        grid_residuals = grid_residuals.transpose(0, 1)
-        grid_residuals = torch.stack([grid_residuals[0], grid_residuals[1], torch.zeros_like(grid_residuals[0])])
-        grid_residuals = grid_residuals.transpose(0, 1)
-        grid_residuals = (255 * grid_residuals).int()
-        print(grid_residuals.dtype)
-        print(grid_residuals.min(), grid_residuals.max())
-        grid_residuals = grid_residuals.reshape(grid_size, grid_size, 3)
+            grid_residuals[i] = torch.mean(residuals_color[mask])
+        grid_residuals = grid_residuals.int()
 
         # plot the heatmap
         plt.clf()

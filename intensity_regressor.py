@@ -134,8 +134,9 @@ trainer.fit(model, dm)
 
 print_with_time("Testing model...")
 trainer = pl.Trainer(
+    default_root_dir=lightning_dir,
     accelerator="gpu",
-    devices=1,
-    num_nodes=1,
+    devices=config["devices"][-1:],
+    logger=wandb_logger,
 )
 trainer.test(model, dm)
