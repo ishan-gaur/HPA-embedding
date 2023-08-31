@@ -118,7 +118,7 @@ if args.stats is not None:
         for file in DATA_DIR.glob("index_*.csv"):
             print(f"{file.stem[6:]}")
 
-    data_paths_file, num_paths = create_image_paths_file(DATA_DIR)
+    data_paths_file, num_paths = create_image_paths_file(DATA_DIR, level=config.grouping)
     image_paths = image_paths_from_folders(data_paths_file)
     if args.stats == stats_opt[PIX_RANGE]:
         pixel_range_info(args, image_paths, CHANNELS, OUTPUT_DIR)
@@ -155,15 +155,17 @@ if args.stats is not None:
 
 if args.image_mask_cache or args.all:
     print("Caching composite images and getting segmentation masks")
-    data_paths_file, num_paths = create_image_paths_file(DATA_DIR, overwrite=args.rebuild)
+    data_paths_file, num_paths = create_image_paths_file(DATA_DIR, level=config.grouping, overwrite=args.rebuild)
     image_paths = image_paths_from_folders(data_paths_file)
     if BASE_INDEX.exists() and not args.rebuild:
         print("Index file already exists, skipping. Set --rebuild to overwrite.")
+        save_channel_names(DATA_DIR, CHANNELS)
     else:
         multi_channel_model = True if CALB2 is not None else False
         segmentator = segmentator_setup(multi_channel_model, device)
         image_paths, nuclei_mask_paths, cell_mask_paths = get_masks(segmentator, image_paths, CHANNELS, DAPI, TUBL, CALB2, rebuild=args.rebuild)
         create_data_path_index(image_paths, cell_mask_paths, nuclei_mask_paths, BASE_INDEX, overwrite=True)
+        save_channel_names(DATA_DIR, CHANNELS)
 
 if args.normalize or args.all:
     print("Normalizing images")
@@ -174,7 +176,7 @@ if args.normalize or args.all:
         assert config.norm_strategy is not None, "Normalization strategy not set in config"
         image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(BASE_INDEX)
         image_paths, _, _ = load_index_paths(BASE_INDEX)
-        norm_paths = normalize_images(image_paths, config.norm_strategy, NORM_SUFFIX)
+        norm_paths = normalize_images(image_paths, config.norm_strategy, NORM_SUFFIX, batch_size=100 if config.grouping == -1 else 1)
         create_data_path_index(norm_paths, cell_mask_paths, nuclei_mask_paths, NORM_INDEX, overwrite=True)
 
 if args.clean_masks or args.all:

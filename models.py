@@ -44,6 +44,7 @@ class Classifier(nn.Module):
     def loss(self, y_pred, y):
         return nn.CrossEntropyLoss()(y_pred, y)
     
+
 class ConvClassifier(nn.Module):
     def __init__(self,
         imsize: int = 256,
@@ -93,11 +94,8 @@ class ConvClassifier(nn.Module):
         self.fully_connected = nn.Sequential(*self.fully_connected)
 
     def forward(self, x):
-        # print(x.shape)
         x = self.model(x)
-        # print(x.shape)
         x = torch.flatten(x, 1)
-        # print(x.shape)
         return self.fully_connected(x)
 
     def loss(self, y_pred, y):
@@ -276,3 +274,180 @@ class DINOClassifier(lightning.LightningModule):
     
     def configure_optimizers(self):
         return torch.optim.Adam(self.classifier.parameters(), lr=self.lr)
+
+
+class Regressor(nn.Module):
+    """
+    Simple feed-forward regression module
+    """
+    def __init__(self,
+        d_input: int = 1024,
+        d_hidden: int = 256,
+        n_hidden: int = 0,
+        d_output: int = 2,
+        dropout: bool = False,
+        batchnorm: bool = False,
+    ):
+        super().__init__()
+        self.model = nn.ModuleList()
+        self.build_model(d_input, d_hidden, n_hidden, d_output, dropout, batchnorm)
+        self.model = nn.Sequential(*self.model)
+
+    def build_model(self, d_input, d_hidden, n_hidden, d_output, dropout, batchnorm):
+        # input layer
+        if dropout:
+            self.model.append(nn.Dropout(0.8))
+        self.model.append(nn.Linear(d_input, d_hidden))
+        self.model.append(nn.GELU())
+
+        # hidden layers
+        for _ in range(n_hidden):
+            if batchnorm:
+                self.model.append(nn.BatchNorm1d(d_hidden))
+            if dropout:
+                self.model.append(nn.Dropout(0.5))
+            self.model.append(nn.Linear(d_hidden, d_hidden))
+            self.model.append(nn.GELU())
+
+        # output layer
+        if batchnorm:
+            self.model.append(nn.BatchNorm1d(d_hidden))
+        if dropout:
+            self.model.append(nn.Dropout(0.2))
+        self.model.append(nn.Linear(d_hidden, d_output))
+        self.model.append(nn.ReLU())
+
+    def forward(self, x):
+        return -1 * self.model(x)
+
+    def loss(self, y_pred, y):
+        return nn.MSELoss()(y_pred, y)
+
+    
+class RegressorLit(lightning.LightningModule):
+    """
+    Lightning module for training a regression model
+    Supports logging for:
+    - MSE loss
+    - KDEplot of predicted intensities
+    - Heatmap of residuals across the output space
+    - Intensity residuals over the DINO embedding NMF components
+    """
+    def __init__(self,
+        # conv: bool = False,
+        d_input: int = 1024,
+        d_hidden = None,
+        n_hidden: int = 0,
+        # imsize: int = 256,
+        # nc: int = 2,
+        # nf: int = 64,
+        d_output: int = 2,
+        lr: float = 5e-5,
+        # soft: bool = False,
+        dropout: bool = False,
+        batchnorm: bool = False,
+    ):
+        super().__init__()
+        if d_hidden is None:
+            d_hidden = d_input
+        self.save_hyperparameters()
+        # if conv:
+        #     self.model = ConvClassifier(imsize=imsize, nc=nc, nf=nf, d_hidden=d_hidden, n_hidden=n_hidden, d_output=d_output, dropout=dropout)
+        # else:
+        self.model = Regressor(d_input=d_input, d_hidden=d_hidden, n_hidden=n_hidden, d_output=d_output, dropout=dropout, batchnorm=batchnorm)
+        # self.model = torch.compile(self.model)
+        self.lr = lr
+        self.train_preds, self.val_preds, self.test_preds = [], [], []
+        self.train_labels, self.val_labels, self.test_labels = [], [], []
+        self.num_classes = d_output
+
+    def forward(self, x):
+        return self.model(x)
+
+    def __shared_step(self, batch, batch_idx, stage):
+        x, y = batch
+        y_pred = self(x)
+        loss = self.model.loss(y_pred, y)
+        preds, labels = y_pred.cpu(), y.cpu()
+        self.log(f"{stage}/loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        return loss, preds, labels
+
+    def _log_image(self, stage, name, ax):
+        fig = ax.get_figure()
+        self.logger.experiment.log({
+            f"{stage}/{name}": wandb.Image(fig),
+        })
+    
+    def __on_shared_epoch_end(self, preds, labels, stage):
+        preds, labels = torch.cat(preds), torch.cat(labels)
+        residuals = labels - preds
+        # these residuals are 2D, residual for CDT1 and for GMNN
+        # we want to make a 2D grid in the label intensity space (also a 2D grid)
+        # and color the grid squares by the mix of CDT1 and GMNN intensities defined by the 
+        # average residual for all points in that grid square
+        # this is a "heatmap" of the residuals across the output space
+
+        # get the grid
+        grid_size = 10
+        grid_x = torch.linspace(labels[:, 0].min(), labels[:, 0].max(), grid_size)
+        grid_y = torch.linspace(labels[:, 1].min(), labels[:, 1].max(), grid_size)
+        grid_x, grid_y = torch.meshgrid(grid_x, grid_y)
+        grid = torch.stack([grid_x, grid_y], dim=-1).reshape(-1, 2)
+
+        # get the average residual for each grid square
+        grid_residuals = torch.zeros_like(grid)
+        for i, point in enumerate(grid):
+            # get the points in the grid square
+            x_min, x_max = point[0] - 0.5, point[0] + 0.5
+            y_min, y_max = point[1] - 0.5, point[1] + 0.5
+            mask = (labels[:, 0] >= x_min) & (labels[:, 0] < x_max) & (labels[:, 1] >= y_min) & (labels[:, 1] < y_max)
+            grid_residuals[i] = torch.mean(residuals[mask])
+
+        # get the color for each grid square
+        grid_residuals = torch.pow(torch.ones_like(grid_residuals) * 10, grid_residuals)
+        grid_residuals = grid_residuals.transpose(0, 1)
+        grid_residuals = torch.stack([grid_residuals[0], grid_residuals[1], torch.zeros_like(grid_residuals[0])])
+        grid_residuals = grid_residuals.transpose(0, 1)
+        grid_residuals = (255 * grid_residuals).int()
+        print(grid_residuals.dtype)
+        print(grid_residuals.min(), grid_residuals.max())
+        grid_residuals = grid_residuals.reshape(grid_size, grid_size, 3)
+
+        # plot the heatmap
+        plt.clf()
+        ax = plt.gca()
+        ax.imshow(grid_residuals)
+        self._log_image(stage, "residuals_heatmap", ax)
+
+    def training_step(self, batch, batch_idx):
+        loss, preds, labels = self.__shared_step(batch, batch_idx, "train")
+        self.train_preds.append(preds)
+        self.train_labels.append(labels)
+        return loss
+
+    def on_train_epoch_end(self):
+        self.__on_shared_epoch_end(self.train_preds, self.train_labels, "train")
+        self.train_preds, self.train_labels = [], []
+
+    def validation_step(self, batch, batch_idx):
+        loss, preds, labels = self.__shared_step(batch, batch_idx, "validate")
+        self.val_preds.append(preds)
+        self.val_labels.append(labels)
+        return loss
+
+    def on_validation_epoch_end(self):
+        self.__on_shared_epoch_end(self.val_preds, self.val_labels, "validate")
+        self.val_preds, self.val_labels = [], []
+    
+    def test_step(self, batch, batch_idx):
+        loss, preds, labels = self.__shared_step(batch, batch_idx, "test")
+        self.test_preds.append(preds)
+        self.test_labels.append(labels)
+        return loss
+
+    def on_test_epoch_end(self):
+        self.__on_shared_epoch_end(self.test_preds, self.test_labels, "test")
+        self.test_preds, self.test_labels = [], []
+
+    def configure_optimizers(self):
+        return optim.Adam(self.parameters(), lr=self.lr)

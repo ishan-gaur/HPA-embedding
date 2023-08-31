@@ -114,6 +114,7 @@ class ImageViewer:
             image = image.cpu().numpy()
         microshow(image, cmaps=self.channel_colors)
 
+
 class SimpleDataset(Dataset):
     def __init__(self, tensor=None, path=None) -> None:
         if path is not None:
@@ -142,6 +143,7 @@ class SimpleDataset(Dataset):
         cache_files = list(path.parent.glob(f"{path.stem}-*.pt"))
         return len(cache_files) > 0
 
+
 class DinoRefToCC(Dataset):
     def __init__(self, data_dir, data_name, ward, num_classes):
         print(f"Loading ref_embeddings_{data_name}.pt")
@@ -163,6 +165,7 @@ class DinoRefToCC(Dataset):
     def __len__(self):
         return self.X.size(0)
 
+
 class RefToCC(Dataset):
     def __init__(self, data_dir, data_name, ward, num_classes):
         self.X = CellImageDataset(data_dir / f"index_{data_name}.csv", channels=[0, 1])
@@ -181,6 +184,7 @@ class RefToCC(Dataset):
 
     def __len__(self):
         return len(self.X)
+
 
 class CellCycleModule(LightningDataModule):
     def __init__(self, data_dir, data_name, batch_size, num_workers, split, ward, num_classes):
@@ -209,7 +213,12 @@ class CellCycleModule(LightningDataModule):
     def test_dataloader(self):
         return self.__shared_dataloader(self.test_dataset)
 
+
 class RefChannelCellCycle(LightningDataModule):
+    """
+    Data module for training a classifier on top of DINO embeddings of DAPI+TUBL reference channels
+    Trying to match labels from a GMM or Ward cluster labeling algorithm of the FUCCI channel intensities
+    """
     def __init__(self, data_dir, data_name, batch_size, num_workers, split, ward, num_classes):
         super().__init__()
         self.data_dir = data_dir
@@ -221,6 +230,47 @@ class RefChannelCellCycle(LightningDataModule):
         self.num_classes = num_classes
 
         dataset = RefToCC(self.data_dir, self.data_name, self.ward, self.num_classes)
+        generator = torch.Generator().manual_seed(420)
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, self.split, generator=generator)
+
+    def __shared_dataloader(self, dataset, shuffle=False):
+        return DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, persistent_workers=True, shuffle=shuffle)
+
+    def train_dataloader(self):
+        return self.__shared_dataloader(self.train_dataset, shuffle=True)
+    
+    def val_dataloader(self):
+        return self.__shared_dataloader(self.val_dataset)
+    
+    def test_dataloader(self):
+        return self.__shared_dataloader(self.test_dataset)
+
+
+class RefChannelIntensity(Dataset):
+    def __init__(self, data_dir, data_name):
+        self.X = torch.load(data_dir / f"ref_embeddings_{data_name}.pt")
+        self.Y = torch.tensor(np.load(data_dir / f"FUCCI_log_intensity_labels_{data_name}.npy"))
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.Y[idx]
+
+    def __len__(self):
+        return len(self.X)
+
+class RefChannelIntensityDM(LightningDataModule):
+    """
+    Data module for training a classifier on top of DINO embeddings of DAPI+TUBL reference channels
+    Trying to match labels from a GMM or Ward cluster labeling algorithm of the FUCCI channel intensities
+    """
+    def __init__(self, data_dir, data_name, batch_size, num_workers, split):
+        super().__init__()
+        self.data_dir = data_dir
+        self.data_name = data_name
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.split = split
+
+        dataset = RefChannelIntensity(self.data_dir, self.data_name)
         generator = torch.Generator().manual_seed(420)
         self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, self.split, generator=generator)
 

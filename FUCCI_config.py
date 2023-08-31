@@ -1,4 +1,15 @@
 """
+Grouping
+
+What level of the directory hierarchy to group the images by. This is used to group images by well, plate, etc.
+0: no grouping, all images should be aggregated into single tensors stored at the root of the dataset directory
+1: group by well, images will be aggregated into the first level of subdirectories
+etc.
+If you want the grouping to be at the individual image level, select -1
+"""
+grouping = 1
+
+"""
 Channel Specification
 
 channels

@@ -68,7 +68,7 @@ fucci_path = Path(args.data)
 project_name = f"FUCCI_conv_classifier" if config["conv"] else f"FUCCI_dino_classifier"
 if config["ward"]:
     project_name += "_ward"
-log_folder = Path(f"/data/ishang/fucci_vae/{project_name}_{args.run}")
+log_folder = Path(f"/data/ishang/pseudotime_pred/{project_name}_{args.run}")
 if not log_folder.exists():
     os.makedirs(log_folder, exist_ok=True)
 lightning_dir = log_folder / "lightning_logs"
