@@ -40,12 +40,13 @@ norm_strategy
     percentile: threshold to [0, 1] by clipping everything outside the percentiles and rescaling
         must set norm_min and norm_max (None by default, should be integers between 0 and 100)
 """
-norm_strategy = 'min_max'
-norm_min, norm_max = None, None
+# norm_strategy = 'min_max'
+# norm_min, norm_max = None, None
 # norm_strategy = 'threshold'
 # norm_min, norm_max = 500, 65535
-# norm_strategy = 'percentile'
-# norm_min, norm_max = 20, 99
+norm_strategy = 'percentile'
+# norm_min, norm_max = 1, 99
+norm_min, norm_max = 15, 99.5
 
 """
 Clean Masks
@@ -72,5 +73,5 @@ output_image_size = 512
 Sharpness Filtering
 sharpness_threshold: threshold for sharpness filtering (float); if None, no filtering is done
 """
-sharpness_threshold = 0.008
+sharpness_threshold = 1250
 # sharpness_threshold = None

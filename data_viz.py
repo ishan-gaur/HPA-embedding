@@ -7,6 +7,8 @@ from microfilm.colorify import multichannel_to_rgb
 from PIL import Image
 from torchvision.utils import make_grid
 
+silent = False
+
 def start_plot():
     plt.clf()
 
@@ -83,14 +85,20 @@ def cdf_percentiles(percentiles, values, channel_names, file_path, log=False):
         end_plot(new_file_path)
 
 def save_image(image, file_path, cmaps):
+    if (image.shape[0] != 1 and image.shape[0] != 3) and cmaps is None:
+        raise ValueError("Must specify cmaps if there are multiple channels")
     img = image.float()
-    print("Converting to RGB")
-    img, _, _, _ = multichannel_to_rgb(img.cpu().numpy(), cmaps=cmaps)
+    if not silent: print("Converting to RGB")
+    if cmaps is not None:
+        img, _, _, _ = multichannel_to_rgb(img.cpu().numpy(), cmaps=cmaps)
+    elif type(img) == torch.Tensor:
+        img = img.permute(1, 2, 0)
+        img = img.cpu().numpy()
     img = Image.fromarray((255 * img[..., :3]).astype(np.uint8))
     img.save(file_path)
-    print(f"Saved image samples to {file_path}")
+    if not silent: print(f"Saved image samples to {file_path}")
 
-def save_image_grid(images, file_path, nrow, cmaps):
+def save_image_grid(images, file_path, nrow, cmaps=None):
     images = images.float()
     grid = make_grid(images, nrow=nrow, normalize=True, value_range=(0, 1))
     save_image(grid, file_path, cmaps)
@@ -107,7 +115,7 @@ def color_image_by_intensity(images, file_path):
     num_levels = len(color_maps)
     intensity_levels = np.logspace(0, 1, num_levels + 1) # +1 because we want to have each color map have a max and min threshold
 
-    print("Thresholding images")
+    if not silent: print("Thresholding images")
     images = images.transpose(1, 0, 2, 3) # C x B x H x W
     intensity_mapped_channels = []
     for channel_images in images:
@@ -124,14 +132,14 @@ def color_image_by_intensity(images, file_path):
         intensity_mapped_channels.append(thresholded_images)
     intensity_mapped_channels = np.stack(intensity_mapped_channels) # C x num_levels x B x H x W
 
-    print("Reshaping images")
+    if not silent: print("Reshaping images")
     intensity_mapped_channels = np.array(intensity_mapped_channels) # C x num_levels x B x H x W
     intensity_mapped_channels = intensity_mapped_channels.transpose(0, 2, 1, 3, 4) # C x B x num_levels x H x W
     intensity_mapped_channels = intensity_mapped_channels.reshape(-1, num_levels, *images.shape[2:]) # C * B x num_levels x H x W
     # intensity_mapped_channels = intensity_mapped_channels.transpose(1, 0, 2, 3) # num_levels x C * B x H x W
     intensity_mapped_channels = torch.from_numpy(intensity_mapped_channels)
 
-    print("Saving images as grid")
+    if not silent: print("Saving images as grid")
     save_image_grid(intensity_mapped_channels, file_path, nrow=images.shape[1], cmaps=color_maps)
 
 def plot_hist_w_threshold(metric, threshold, output_file):

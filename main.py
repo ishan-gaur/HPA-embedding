@@ -9,7 +9,7 @@ from tqdm import tqdm
 import utils
 import pipeline
 from pipeline import create_image_paths_file, image_paths_from_folders, create_data_path_index, load_index_paths, load_channel_names, save_channel_names
-from pipeline import segmentator_setup, get_masks, normalize_images, clean_and_save_masks, crop_images, resize, filter_by_sharpness
+from pipeline import segmentator_setup, get_masks, normalize_images, clean_and_save_masks, crop_images, resize, filter_images_by_sharpness, filter_masks_by_sharpness
 from stats import pixel_range_info, normalization_dry_run, image_by_level_set, sample_sharpness, sharpness_dry_run
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -43,8 +43,9 @@ parser.add_argument('--viz_num', type=int, default=5, help='Number of samples to
 parser.add_argument('--calc_num', type=int, default=30, help='Number of samples to use for calculating image stats')
 parser.add_argument('--all', action='store_true', help='Run all steps')
 parser.add_argument('--image_mask_cache', action='store_true', help='Save images')
-parser.add_argument('--normalize', action='store_true', help='Normalize images')
 parser.add_argument('--clean_masks', action='store_true', help='Clean masks: remove small objects and join cells without nuclei, etc.')
+parser.add_argument('--filter_sharpness', action='store_true', help='Filter out blurry images based on config sharpness threshold')
+parser.add_argument('--normalize', action='store_true', help='Normalize images')
 parser.add_argument('--single_cell', action='store_true', help='Crop and save single cell images')
 parser.add_argument('--rgb', action='store_true', help='Convert images to RGB')
 parser.add_argument('--dino_cls', action='store_true', help='Cache dino cls embeddings')
@@ -53,6 +54,7 @@ parser.add_argument('--fucci_gmm', action='store_true', help='Fit GMM to FUCCI i
 parser.add_argument('--batch_size', type=int, default=10, help='Batch size for dino inference')
 parser.add_argument('--device', type=int, default=7, help='GPU device number')
 parser.add_argument('--rebuild', action='store_true', help='Rebuild specifed steps even if files exist')
+parser.add_argument('--save_samples', action='store_true', help='Save sample outputs for each well')
 
 args = parser.parse_args()
 
@@ -87,10 +89,19 @@ print(f"Using device {device}")
 #===================================================================================================
 no_name = (args.name == 'unspecified')
 BASE_INDEX = DATA_DIR / "index.csv"
-NORM_SUFFIX = f"_{config.norm_strategy}{f'_{config.norm_min}_{config.norm_max}' if config.norm_strategy in ['threshold', 'percentile'] else ''}"
-NORM_INDEX = DATA_DIR / f"index{NORM_SUFFIX}.csv"
+
+CLEAN_SUFFIX = f"{'no_border_' if config.rm_border else ''}{'rm_' + str(config.remove_size)}"
+CLEAN_INDEX = DATA_DIR / f"index_clean_{CLEAN_SUFFIX}.csv"
+
+SHARP_SUFFIX = f"{config.sharpness_threshold}".split(".")[-1] if config.sharpness_threshold is not None else "none"
+SHARP_INDEX = DATA_DIR / f"{CLEAN_INDEX.stem}_sharp_{SHARP_SUFFIX}.csv"
+
+NORM_SUFFIX = f"{config.norm_strategy}{f'_{config.norm_min}_{config.norm_max}' if config.norm_strategy in ['threshold', 'percentile'] else ''}"
+NORM_INDEX = DATA_DIR / f"{CLEAN_INDEX.stem if config.sharpness_threshold is None else SHARP_INDEX.stem}_norm_{NORM_SUFFIX}.csv"
+
 NAME_INDEX = DATA_DIR / f"index_{args.name}.csv"
 CONFIG_FILE = DATA_DIR / f"{args.name}.py"
+
 try:
     sys.path.append(str(CONFIG_FILE.parent))
     dataset_config = None if no_name else import_module(str(CONFIG_FILE.stem))
@@ -98,6 +109,7 @@ except ModuleNotFoundError:
     if NAME_INDEX.exists():
         print(f"Config file {CONFIG_FILE} not found, but index file {NAME_INDEX} exists, this should not be the case")
     dataset_config = None
+
 RGB_DATASET = DATA_DIR / f"rgb_{args.name}.pt"
 EMBEDDINGS_DATASET = DATA_DIR / f"embeddings_{args.name}.pt"
 GMM_PATH = DATA_DIR / f"gmm_{args.name}.pkl"
@@ -159,7 +171,6 @@ if args.image_mask_cache or args.all:
     image_paths = image_paths_from_folders(data_paths_file)
     if BASE_INDEX.exists() and not args.rebuild:
         print("Index file already exists, skipping. Set --rebuild to overwrite.")
-        save_channel_names(DATA_DIR, CHANNELS)
     else:
         multi_channel_model = True if CALB2 is not None else False
         segmentator = segmentator_setup(multi_channel_model, device)
@@ -168,13 +179,41 @@ if args.image_mask_cache or args.all:
         save_channel_names(DATA_DIR, CHANNELS)
 
 if args.clean_masks or args.all:
-    print("Cleaning masks")
-    assert BASE_INDEX.exists(), "Index file does not exist, run --image_mask_cache first"
-    _, cell_mask_paths, nuclei_mask_paths = load_index_paths(BASE_INDEX)
-    num_original, num_removed = clean_and_save_masks(cell_mask_paths, nuclei_mask_paths, rm_border=config.rm_border, remove_size=config.remove_size)
-    print("Fraction removed:", num_removed / num_original)
-    print("Total cells removed:", num_removed)
-    print("Total cells remaining:", num_original - num_removed)
+    if CLEAN_INDEX.exists() and not args.rebuild:
+        print("Index file already exists, skipping. Set --rebuild to overwrite.")
+    else:
+        print("Cleaning masks")
+        assert BASE_INDEX.exists(), "Index file does not exist, run --image_mask_cache first"
+        image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(BASE_INDEX)
+        clean_cell_mask_paths, clean_nuclei_mask_paths, num_original, num_removed = clean_and_save_masks(cell_mask_paths, nuclei_mask_paths, CLEAN_SUFFIX,
+            rm_border=config.rm_border, remove_size=config.remove_size)
+        create_data_path_index(image_paths, clean_cell_mask_paths, clean_nuclei_mask_paths, CLEAN_INDEX, overwrite=True)
+        print("Fraction removed:", num_removed / num_original)
+        print("Total cells removed:", num_removed)
+        print("Total cells remaining:", num_original - num_removed)
+
+if args.filter_sharpness or args.all:
+    assert CLEAN_INDEX.exists(), "Index file does not exist, run --clean_masks first"
+    clean_image_paths, clean_cell_mask_paths, clean_nuclei_mask_paths = load_index_paths(CLEAN_INDEX)
+    # we just overwrite the segmentation masks with the filtered ones so no need to get new paths
+    sharp_cell_mask_paths, sharp_nuclei_mask_paths, num_removed, num_total = filter_masks_by_sharpness(clean_image_paths, 
+        clean_cell_mask_paths, clean_nuclei_mask_paths, config.sharpness_threshold, config.dapi, config.tubl, SHARP_SUFFIX,
+        args.save_samples, config.cmaps)
+    create_data_path_index(clean_image_paths, sharp_cell_mask_paths, sharp_nuclei_mask_paths, SHARP_INDEX, overwrite=True)
+    print("Fraction blurry that were removed:", num_removed / num_total)
+
+if args.normalize or args.all:
+    print("Normalizing images")
+    if NORM_INDEX.exists() and not args.rebuild:
+        print("Index file already exists, skipping. Set --rebuild to overwrite.")
+    else:
+        assert SHARP_INDEX.exists() or CLEAN_INDEX.exists(), "Index file does not exist, run --image_mask_cache (and optionally --clean_masks) first"
+        SRC_INDEX = SHARP_INDEX if config.sharpness_threshold is not None else CLEAN_INDEX
+        assert config.norm_strategy is not None, "Normalization strategy not set in config"
+        image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(SRC_INDEX)
+        norm_paths = normalize_images(image_paths, cell_mask_paths, config.norm_strategy, config.norm_min, config.norm_max,
+            NORM_SUFFIX, batch_size=100 if config.grouping == -1 else 1, save_samples=args.save_samples, cmaps=config.cmaps)
+        create_data_path_index(norm_paths, cell_mask_paths, nuclei_mask_paths, NORM_INDEX, overwrite=True)
 
 if args.single_cell or args.all:
     print("Cropping single cell images")
@@ -182,14 +221,12 @@ if args.single_cell or args.all:
     if NAME_INDEX.exists() and not args.rebuild:
         print("Index file already exists, skipping. Set --rebuild to overwrite.")
     else:
-        assert NORM_INDEX.exists(), "Index file for normalized images does not exist, run --normalize first"
-        image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(NORM_INDEX)
-        seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths = crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, config.cutoff, config.nuc_margin)
-        if config.sharpness_threshold:
-            # we just overwrite the segmentation masks with the filtered ones so no need to get new paths
-            num_removed, num_total = filter_by_sharpness(seg_image_paths, config.sharpness_threshold, seg_cell_mask_paths, seg_nuclei_mask_paths)
-            print("Fraction blurry that were removed:", num_removed / num_total)
-        final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths = resize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths, config.output_image_size, args.name)
+        # assert NORM_INDEX.exists(), "Index file for normalized images does not exist, run --normalize first"
+        # image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(NORM_INDEX)
+        assert BASE_INDEX.exists(), "Index file does not exist, run --image_mask_cache (and optionally --clean_masks) first"
+        seg_image_paths, clean_cell_mask_paths, clean_nuclei_mask_paths = crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, config.cutoff, config.nuc_margin)
+        # TODO: just add normalization here?
+        final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths = resize(seg_image_paths, clean_cell_mask_paths, clean_nuclei_mask_paths, config.output_image_size, args.name)
         create_data_path_index(final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths, NAME_INDEX, overwrite=True)
 
         # save the source of the config module to the data directory with name args.name + '.py'
@@ -200,18 +237,6 @@ if args.single_cell or args.all:
             f.write(inspect.getsource(config))
 
         dataset_config = config
-
-if args.normalize or args.all:
-    print("Normalizing images")
-    if NORM_INDEX.exists() and not args.rebuild:
-        print("Index file already exists, skipping. Set --rebuild to overwrite.")
-    else:
-        assert BASE_INDEX.exists(), "Index file does not exist, run --image_mask_cache first"
-        assert config.norm_strategy is not None, "Normalization strategy not set in config"
-        image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(BASE_INDEX)
-        image_paths, _, _ = load_index_paths(BASE_INDEX)
-        norm_paths = normalize_images(image_paths, config.norm_strategy, NORM_SUFFIX, batch_size=100 if config.grouping == -1 else 1)
-        create_data_path_index(norm_paths, cell_mask_paths, nuclei_mask_paths, NORM_INDEX, overwrite=True)
 
 if args.rgb or args.all:
     from data import CellImageDataset, SimpleDataset

@@ -14,7 +14,7 @@ import cv2
 from scipy import ndimage
 from microfilm.microplot import microshow
 from skimage import measure, segmentation, morphology
-from utils import min_max_normalization, sample_sharpness
+from utils import min_max_normalization, percentile_normalization, image_cells_sharpness
 
 suppress_warnings = False
 
@@ -372,12 +372,14 @@ def relabel_masks(cell_mask, nuclei_mask):
 def clean_and_save_masks(
     cell_mask_paths,
     nuclei_mask_paths,
+    clean_suffix,
     rm_border=True, # removes cells with nuclei touching the border
     remove_size=2500, # remove cells smaller than remove_size, based on the area of the bounding box, honestly could be higher, mb 2500. Make 0 to turn off.
     # dialation_radius=0, # this is for 2048x2048 images adjust as needed. Make 0 to turn off.
 ):
     num_original = 0
     num_removed = 0
+    new_cell_paths, new_nuclei_paths = [], []
     for (cell_mask_path, nuclei_mask_path) in tqdm(list(zip(cell_mask_paths, nuclei_mask_paths)), desc="Cleaning masks"):
         cell_mask = np.load(cell_mask_path).squeeze()
         nuclei_mask = np.load(nuclei_mask_path).squeeze()
@@ -396,9 +398,13 @@ def clean_and_save_masks(
             num_removed += n_removed
         assert set(np.unique(nuclei_mask)) == set(np.unique(cell_mask)), f"Mask mismatch after cleaning, nuclei: {np.unique(nuclei_mask)}, cell: {np.unique(cell_mask)}"
         cell_mask, nuclei_mask = relabel_masks(cell_mask, nuclei_mask)
-        np.save(cell_mask_path, cell_mask)
-        np.save(nuclei_mask_path, nuclei_mask)
-    return num_original, num_removed
+        new_cell_path = cell_mask_path.parent / f"{cell_mask_path.stem}_{clean_suffix}"
+        new_nuclei_path = nuclei_mask_path.parent / f"{nuclei_mask_path.stem}_{clean_suffix}"
+        np.save(new_cell_path, cell_mask)
+        np.save(new_nuclei_path, nuclei_mask)
+        new_cell_paths.append(new_cell_path.parent / (new_cell_path.stem + ".npy"))
+        new_nuclei_paths.append(new_nuclei_path.parent / (new_nuclei_path.stem + ".npy"))
+    return new_cell_paths, new_nuclei_paths, num_original, num_removed
 
 
 def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_margin=50):
@@ -575,26 +581,49 @@ def load_dir_images(index_file, num_load=None):
         images.append(torch.load(Path(image_path)))
     return images
 
-def normalize_images(image_paths, norm_strategy, norm_suffix=None, batch_size=100):
+def normalize_images(image_paths, cell_masks_paths, norm_strategy, norm_min, norm_max, norm_suffix, batch_size=100, save_samples=False, cmaps=None):
+    # batch_size needs to be 1 if using well-level normalization
+    # maybe I just need to make a normalize_wells function
+    if save_samples and not cmaps:
+        raise ValueError("Need to provide cmaps if saving samples")
+
+    import data_viz
+    data_viz.silent = True
+    from data_viz import save_image, save_image_grid
+
     paths = []
     for i in tqdm(range(0, len(image_paths), batch_size), desc="Normalizing images"):
         batch_paths = image_paths[i:min(i+batch_size, len(image_paths))]
-        # print(len(batch_paths))
+        batch_mask_paths = cell_masks_paths[i:min(i+batch_size, len(image_paths))]
         images = []
-        for path in batch_paths:
-            images.append(np.load(path))
-        # print(len(images))
-        # print(images)
-        # if len(images[0].shape) == 2:
-        #     images = np.stack(images, axis=0)
-        #     # images = np.expand_dims(images, axis=1)
-        # else:
+        masks = []
+        for image_path, cell_path in zip(batch_paths, batch_mask_paths):
+            images.append(np.load(image_path))
+            masks.append(np.load(cell_path))
         images = np.concatenate(images, axis=0)
+        masks = np.concatenate(masks, axis=0)[:, None, ...]
+        images = images * (masks > 0)
 
         if norm_strategy == "min_max":
             images = min_max_normalization(images, stats=False)
+        elif norm_strategy == "percentile":
+            if norm_min is None or norm_max is None:
+                raise ValueError("Must provide norm_min and norm_max for percentile normalization")
+            images = percentile_normalization(images, norm_min, norm_max, stats=False)
         else:
             raise NotImplementedError(f"Normalization strategy {norm_strategy} not implemented in CLI")
+
+        if save_samples:
+            image = images[-1]
+            old_image = np.load(batch_paths[-1])[-1].astype("float32")
+            for c in range(image.shape[0]):
+                old_image[c] = (old_image[c] - old_image[c].min()) / (old_image[c].max() - old_image[c].min())
+            old_image = old_image * (masks[-1] > 0)
+            path = batch_paths[-1]
+            path = path.parent / (f"{path.stem}{norm_suffix}" + ".png")
+            sample_images = torch.tensor(np.concatenate([old_image, image]))
+            sample_images = sample_images[:, None, ...]
+            save_image_grid(sample_images, path, nrow=image.shape[0], cmaps=None)
 
         for j, path in enumerate(batch_paths):
             if norm_suffix is not None:
@@ -603,7 +632,7 @@ def normalize_images(image_paths, norm_strategy, norm_suffix=None, batch_size=10
             paths.append(path)
     return paths
 
-def filter_by_sharpness(seg_image_paths, threshold, seg_cell_mask_paths=None, seg_nuclei_mask_paths=None):
+def filter_images_by_sharpness(seg_image_paths, threshold, sharp_suffix, seg_cell_mask_paths=None, seg_nuclei_mask_paths=None):
     if seg_cell_mask_paths is None:
         seg_cell_mask_paths = [None] * len(seg_image_paths)
     if seg_nuclei_mask_paths is None:
@@ -627,3 +656,43 @@ def filter_by_sharpness(seg_image_paths, threshold, seg_cell_mask_paths=None, se
         num_total += num_images
         np.save(images_path, images.numpy())
     return num_removed, num_total
+
+def filter_masks_by_sharpness(image_paths, cell_mask_paths, nuclei_mask_paths, threshold, dapi, tubl, sharp_suffix, save_samples=True, cmaps=None):
+    if save_samples and not cmaps:
+        raise ValueError("Need to provide cmaps if saving samples")
+    import data_viz
+    data_viz.silent = True
+    from data_viz import save_image
+    new_cell_paths, new_nuclei_paths = [], []
+    num_removed, num_total = 0, 0
+    for images_path, cell_mask_path, nuclei_mask_path in tqdm(zip(image_paths, cell_mask_paths, nuclei_mask_paths),
+                                                              desc="Filtering by sharpness", total=len(image_paths)):
+        images = np.load(images_path).astype("float32")
+        cell_masks = np.load(cell_mask_path).astype("float32")
+        nuclei_masks = np.load(nuclei_mask_path).astype("float32")
+        for i in range(len(images)):
+            image, cell_mask = images[i, (dapi, tubl)], cell_masks[i] # sharpness only on dapi and tubl to generalize better
+            num_cells = len(np.unique(cell_mask)) - 1 # -1 because the background is 0
+            sharpness_levels = image_cells_sharpness(torch.tensor(image), cell_mask)
+            sharpness_levels = np.array([threshold if s is None else s for s in sharpness_levels])
+            keep_set = np.where(sharpness_levels > threshold)[0]
+            cell_mask = cell_mask * np.isin(cell_mask, keep_set)
+            nuclei_mask = nuclei_masks[i] * np.isin(cell_mask, keep_set)
+            cell_masks[i], nuclei_masks[i] = relabel_masks(cell_mask, nuclei_mask)
+            num_total += num_cells
+            num_removed += num_cells - (len(np.unique(cell_mask)) - 1) # -1 because the background is 0
+        new_cell_path = cell_mask_path.parent / f"{cell_mask_path.stem}_sharp_{sharp_suffix}"
+        new_nuclei_path = nuclei_mask_path.parent / f"{nuclei_mask_path.stem}_sharp_{sharp_suffix}"
+        if save_samples:
+            old_mask = np.load(cell_mask_path).astype("float32")[-1]
+            new_mask = cell_masks[-1]
+            cmaps = [cmaps[dapi], cmaps[tubl]]
+            save_image(torch.tensor(image * ((new_mask == 0) & (old_mask != 0))), new_cell_path.parent / f"sharp_removed_{new_cell_path.stem}.png", cmaps)
+        np.save(new_cell_path, cell_masks)
+        np.save(new_nuclei_path, nuclei_masks)
+        new_cell_path = new_cell_path.parent / (new_cell_path.stem + ".npy")
+        new_nuclei_path = new_nuclei_path.parent / (new_nuclei_path.stem + ".npy")
+        new_cell_paths.append(new_cell_path)
+        new_nuclei_paths.append(new_nuclei_path)
+
+    return new_cell_paths, new_nuclei_paths, num_removed, num_total
