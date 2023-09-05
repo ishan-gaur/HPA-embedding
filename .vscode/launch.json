@@ -13,6 +13,13 @@
             "justMyCode": true
         },
         {
+            "name": "DEBUG: well normalization script",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/well_normalization.py",
+            "console": "integratedTerminal",
+        },
+        {
             "name": "DEBUG: image processing pipeline wells",
             "type": "python",
             "request": "launch",
