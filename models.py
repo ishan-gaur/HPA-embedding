@@ -390,7 +390,6 @@ class RegressorLit(lightning.LightningModule):
         print("Labels range:", labels[:, 0].min(), labels[:, 0].max(), labels[:, 1].min(), labels[:, 1].max())
         print("Preds length:", len(preds))
         print("Preds range:", preds[:, 0].min(), preds[:, 0].max(), preds[:, 1].min(), preds[:, 1].max())
-        preds = torch.clone(labels)
     
         # plot the intensity kdeplot
         plt.clf()
@@ -406,17 +405,10 @@ class RegressorLit(lightning.LightningModule):
         preds_color = torch.pow(torch.ones_like(preds) * 10, preds) # 10 ** preds
         print("Preds range", preds_color[:, 0].min(), preds_color[:, 0].max(), preds_color[:, 1].min(), preds_color[:, 1].max())
 
-
         # the actual labels have values that are pretty low, because they're averaged so
         # we're going to rescale labels accordingly (looked at some outputs--Train/Val mix max are (0.02, 0.7), (0.02, 0.9))
         # so actually not going to rescale, just clip
         preds_color = torch.clamp(preds_color, min=0.0, max=1.0)
-        # by the preds min/max values and then clip before remapping to 0-255
-        # labels_color = torch.pow(torch.ones_like(labels) * 10, labels)
-        # print("labels", labels_color.min(), labels_color.max())
-        # preds_color = (preds_color - labels_color.min()) / (labels_color.max() - labels_color.min())
-        # print(preds_color.min(), preds_color.max())
-
 
         # Add B channel to get RGB colors
         preds_color = preds_color.transpose(0, 1) # C x B
