@@ -63,26 +63,19 @@ def well_normalization_map(original_perc, transformed_perc):
     return normalize
 
 
-if not Path("test_norm_image.npy").exists() or True:
-    for i, (image_path, mask_path) in tqdm(enumerate(zip(image_paths, mask_paths)), total=len(image_paths), desc="Calculating well percentiles"):
-        if i != 2:
-            continue
-        normalization_function = well_normalization_map(well_percentiles[i], normalized_well_percentiles[i])
-        images = np.load(image_path)
-        masks_path = str(mask_path) + ".npy"
-        masks = np.load(masks_path)[:, None, ...]
-        images = images * (masks > 0)
-        normalized_images = normalization_function(images[:4])
-        np.save("test_norm_image", normalized_images)
-else:
-    normalized_images = np.load("test_norm_image.npy")
-    print(image_paths[2])
-    images = np.load(image_paths[2])
-    masks = np.load(str(mask_paths[2]) + ".npy")[:, None, ...]
+for i, (image_path, mask_path) in tqdm(enumerate(zip(image_paths, mask_paths)), total=len(image_paths), desc="Calculating well percentiles"):
+    if (well_percentiles[i] != normalized_well_percentiles[i]).any():
+        continue
+    normalization_function = well_normalization_map(well_percentiles[i], normalized_well_percentiles[i])
+    images = np.load(image_path).astype("float32")
+    masks_path = str(mask_path) + ".npy"
+    masks = np.load(masks_path)[:, None, ...].astype("float32")
     images = images * (masks > 0)
+    images = images[:5]
+    normalized_images = normalization_function(np.copy(images))
+    break
 
-
-for orig, norm in zip(images[:4], normalized_images):
+for orig, norm in zip(images, normalized_images):
     # normalize each channel of orig to [0, 1]
     print(norm.min(), norm.max())
     print(orig.min(), orig.max())
