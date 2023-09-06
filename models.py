@@ -424,12 +424,11 @@ class RegressorLit(lightning.LightningModule):
         preds_color = preds_color.transpose(0, 1)
         # print(preds_color.min(), preds_color.max())
 
-        # get the grid
+        # get the grid: x is CDT1, y is GMNN; axis 0 is y, axis 1 is x
         grid_size = 10
-        vertices_x = torch.linspace(0, 1, grid_size + 1)
-        vertices_y = torch.linspace(0, 1, grid_size + 1)
+        vertices_x = torch.linspace(-3, 0, grid_size + 1)
+        vertices_y = torch.linspace(-3, 0, grid_size + 1)
 
-        vertices_x, vertices_y = torch.log10(vertices_x), torch.log10(vertices_y)
         vertices_x, vertices_y = torch.meshgrid(vertices_x, vertices_y)
         vertices = torch.stack([vertices_x, vertices_y], dim=-1).reshape(grid_size + 1, grid_size + 1, 2)
 
@@ -447,6 +446,7 @@ class RegressorLit(lightning.LightningModule):
                 if (i == 0 and j == 0) or (i == grid_size - 1 and j == grid_size - 1):
                     print(10 ** x_min, 10 ** x_max, 10 ** y_min, 10 ** y_max)
         grid_residuals = torch.clamp(grid_residuals, 0, 1) * 255
+        grid_residuals = grid_residuals.flip(0) # because the y axis is decreasing in the plot
 
         # plot the heatmap
         plt.clf()

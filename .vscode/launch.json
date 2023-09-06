@@ -39,6 +39,25 @@
             ],
         },
         {
+            "name": "DEBUG: spline normalization",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--data_dir", "/data/ishang/FUCCI-dataset-well/",
+                // "--image_mask_cache",
+                // "--clean_masks",
+                // "--filter_sharpness",
+                "--normalize",
+                // "--single_cell",
+                "--config", "FUCCI_well_config.py",
+                "--name", "well_spline_norm_512_crop_sharpness_1250",
+                "--rebuild",
+                "--save_samples"
+            ],
+        },
+        {
             "name": "DEBUG: norm visualization",
             "type": "python",
             "request": "launch",
