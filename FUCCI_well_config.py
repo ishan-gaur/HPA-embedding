@@ -40,13 +40,15 @@ norm_strategy
     percentile: threshold to [0, 1] by clipping everything outside the percentiles and rescaling
         must set norm_min and norm_max (None by default, should be integers between 0 and 100)
 """
+norm_strategy = 'spline'
+norm_min, norm_max = None, None
 # norm_strategy = 'min_max'
 # norm_min, norm_max = None, None
 # norm_strategy = 'threshold'
 # norm_min, norm_max = 500, 65535
-norm_strategy = 'percentile'
+# norm_strategy = 'percentile'
 # norm_min, norm_max = 1, 99
-norm_min, norm_max = 15, 99.5
+# norm_min, norm_max = 15, 99.5
 
 """
 Clean Masks

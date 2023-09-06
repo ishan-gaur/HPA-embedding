@@ -96,7 +96,15 @@ CLEAN_INDEX = DATA_DIR / f"index_clean_{CLEAN_SUFFIX}.csv"
 SHARP_SUFFIX = f"{config.sharpness_threshold}".split(".")[-1] if config.sharpness_threshold is not None else "none"
 SHARP_INDEX = DATA_DIR / f"{CLEAN_INDEX.stem}_sharp_{SHARP_SUFFIX}.csv"
 
-NORM_SUFFIX = f"{config.norm_strategy}{f'_{config.norm_min}_{config.norm_max}' if config.norm_strategy in ['threshold', 'percentile'] else ''}"
+if config.norm_strategy in ['threshold', 'percentile']:
+    NORM_SUFFIX = f"{config.norm_strategy}{f'_{config.norm_min}_{config.norm_max}' if config.norm_strategy in ['threshold', 'percentile'] else ''}"
+elif config.norm_strategy == 'spline':
+    if args.image_mask_cache or args.all:
+        print("WARNING: automatically setting buckets to 2^8 for spline normalization")
+        buckets = 2 ** 8
+    else:
+        from well_normalization import buckets
+    NORM_SUFFIX = f"{config.norm_strategy}_{buckets}"
 NORM_INDEX = DATA_DIR / f"{CLEAN_INDEX.stem if config.sharpness_threshold is None else SHARP_INDEX.stem}_norm_{NORM_SUFFIX}.csv"
 
 NAME_INDEX = DATA_DIR / f"index_{args.name}.csv"
@@ -171,6 +179,7 @@ if args.image_mask_cache or args.all:
     image_paths = image_paths_from_folders(data_paths_file)
     if BASE_INDEX.exists() and not args.rebuild:
         print("Index file already exists, skipping. Set --rebuild to overwrite.")
+        save_channel_names(DATA_DIR, CHANNELS)
     else:
         multi_channel_model = True if CALB2 is not None else False
         segmentator = segmentator_setup(multi_channel_model, device)
@@ -203,17 +212,40 @@ if args.filter_sharpness or args.all:
     print("Fraction blurry that were removed:", num_removed / num_total)
 
 if args.normalize or args.all:
+    import well_normalization as spline
     print("Normalizing images")
     if NORM_INDEX.exists() and not args.rebuild:
         print("Index file already exists, skipping. Set --rebuild to overwrite.")
     else:
         assert SHARP_INDEX.exists() or CLEAN_INDEX.exists(), "Index file does not exist, run --image_mask_cache (and optionally --clean_masks) first"
         SRC_INDEX = SHARP_INDEX if config.sharpness_threshold is not None else CLEAN_INDEX
+        assert SRC_INDEX.exists(), "Index file does not exist, run --filter_sharpness (and optionally --clean_masks) first"
         assert config.norm_strategy is not None, "Normalization strategy not set in config"
-        image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(SRC_INDEX)
-        norm_paths = normalize_images(image_paths, cell_mask_paths, config.norm_strategy, config.norm_min, config.norm_max,
-            NORM_SUFFIX, batch_size=100 if config.grouping == -1 else 1, save_samples=args.save_samples, cmaps=config.cmaps)
-        create_data_path_index(norm_paths, cell_mask_paths, nuclei_mask_paths, NORM_INDEX, overwrite=True)
+
+        if config.norm_strategy == 'spline':
+            if SRC_INDEX != spline.PRECALC_INDEX_PATH:
+                raise NotImplementedError("Spline normalization requires precalculated well percentiles, run well_percentiles.ipynb and well_normalization.py first with your desired input data.")
+            image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(spline.PRECALC_INDEX_PATH)
+            mask_paths = cell_mask_paths
+            normalized_image_paths = []
+            for i, (image_path, mask_path) in tqdm(enumerate(zip(image_paths, mask_paths)), total=len(image_paths), desc="Calculating well percentiles"):
+                normalization_function = spline.well_normalization_map(spline.well_percentiles[i], spline.normalized_well_percentiles[i], range_max=(np.iinfo(np.uint16).max + 1))
+                images = np.load(image_path).astype("float32")
+                masks_path = str(mask_path) + ".npy"
+                masks = np.load(masks_path)[:, None, ...].astype("float32")
+                images = images * (masks > 0)
+                images = images
+                normalized_images = normalization_function(np.copy(images))
+                new_image_path = image_path.parent / (image_path.stem + f"_spline_{spline.buckets}_normalized")
+                np.save(new_image_path, normalized_images)
+                new_image_path = new_image_path.parent / (new_image_path.stem + ".npy")
+                normalized_image_paths.append(new_image_path)
+            create_data_path_index(normalized_image_paths, cell_mask_paths, nuclei_mask_paths, NORM_INDEX, overwrite=True)
+        else:
+            image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(SRC_INDEX)
+            norm_paths = normalize_images(image_paths, cell_mask_paths, config.norm_strategy, config.norm_min, config.norm_max,
+                NORM_SUFFIX, batch_size=100 if config.grouping == -1 else 1, save_samples=args.save_samples, cmaps=config.cmaps)
+            create_data_path_index(norm_paths, cell_mask_paths, nuclei_mask_paths, NORM_INDEX, overwrite=True)
 
 if args.single_cell or args.all:
     print("Cropping single cell images")
@@ -221,11 +253,10 @@ if args.single_cell or args.all:
     if NAME_INDEX.exists() and not args.rebuild:
         print("Index file already exists, skipping. Set --rebuild to overwrite.")
     else:
-        # assert NORM_INDEX.exists(), "Index file for normalized images does not exist, run --normalize first"
-        # image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(NORM_INDEX)
-        assert BASE_INDEX.exists(), "Index file does not exist, run --image_mask_cache (and optionally --clean_masks) first"
+        assert NORM_INDEX.exists(), "Index file for normalized images does not exist, run --normalize first"
+        print(NORM_INDEX)
+        image_paths, cell_mask_paths, nuclei_mask_paths = load_index_paths(NORM_INDEX)
         seg_image_paths, clean_cell_mask_paths, clean_nuclei_mask_paths = crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, config.cutoff, config.nuc_margin)
-        # TODO: just add normalization here?
         final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths = resize(seg_image_paths, clean_cell_mask_paths, clean_nuclei_mask_paths, config.output_image_size, args.name)
         create_data_path_index(final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths, NAME_INDEX, overwrite=True)
 
@@ -248,7 +279,7 @@ if args.rgb or args.all:
         print("Creating RGB images")
         assert NAME_INDEX.exists(), "Index file for single cell images does not exist, run --single_cell first"
         assert CONFIG_FILE.exists(), "Config file does not exist for the dataset, something might have gone wrong when you ran --single_cell"
-        dataset = CellImageDataset(NAME_INDEX, dataset_config.cmaps)
+        dataset = CellImageDataset(NAME_INDEX, dataset_config.cmaps, batch_size=args.batch_size)
         rgb_dataset = dataset.as_rgb()
         rgb_dataset.save(RGB_DATASET)
 

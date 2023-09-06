@@ -411,89 +411,109 @@ def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_
     # images need to be C x H x W
     seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths = [], [], []
     for (image_path, cell_mask_path, nuclei_mask_path) in tqdm(list(zip(image_paths, cell_mask_paths, nuclei_mask_paths)), desc="Cropping images"):
-        image = np.load(image_path).squeeze()
-        cell_masks = np.load(cell_mask_path).squeeze()
-        nuclei_masks = np.load(nuclei_mask_path).squeeze()
+        cache_images = np.load(image_path)
+        cache_cell_masks = np.load(cell_mask_path)
+        cache_nuclei_masks = np.load(nuclei_mask_path)
 
-        region_props = measure.regionprops(cell_masks)
-        nuclear_regions = measure.regionprops(nuclei_masks)
-        bboxes = np.array([x.bbox for x in region_props])
-        bbox_widths = bboxes[:, 2] - bboxes[:, 0]
-        bbox_heights = bboxes[:, 3] - bboxes[:, 1]
-        nuc_bboxes = np.array([x.bbox for x in nuclear_regions])
+        assert (cache_cell_masks.astype(int).astype(cache_cell_masks.dtype) == cache_cell_masks).all(), f"Cell masks are not integers, {cell_masks.dtype}"
+        assert (cache_nuclei_masks.astype(int).astype(cache_nuclei_masks.dtype) == cache_nuclei_masks).all(), f"Nuclei masks are not integers, {nuclei_masks.dtype}"
 
-        cell_mask_list = []
-        nuclei_mask_list = []
-        image_list = []
-        for i, (bbox, width, height, nbox) in enumerate(zip(bboxes, bbox_widths, bbox_heights, nuc_bboxes)):
-            center = np.array([np.mean([bbox[0], bbox[2]]), np.mean([bbox[1], bbox[3]])])
-            if width > crop_size:
-                left_edge = int(center[0] - crop_size / 2)
-                right_edge = int(center[0] + crop_size / 2)
-                if nbox[0] < left_edge and nbox[2] > right_edge:
-                    print(f"nucleus {i} is wider than crop region, bbox: {bbox}, nbox: {nbox}, center: {center}, crop_size: {crop_size}")
-                    continue
-                if nbox[0] < left_edge:
-                    new_left = nbox[0] - nuc_margin
-                    displacement = new_left - left_edge
-                    left_edge = new_left
-                    right_edge = right_edge + displacement
-                elif nbox[2] > right_edge:
-                    new_right = nbox[2] + nuc_margin
-                    displacement = new_right - right_edge
-                    right_edge = new_right
-                    left_edge = left_edge + displacement
-                slice_x = slice(max(0, left_edge), min(cell_masks.shape[0], right_edge)) 
-                padding_x = (max(0 - left_edge, 0), max(right_edge - cell_masks.shape[0], 0))
-            else:
-                slice_x = slice(bbox[0], bbox[2])
-                padding_x = crop_size - width
-                padding_x = (padding_x // 2, padding_x - padding_x // 2)
-            if height > crop_size:
-                top_edge = int(center[1] - crop_size / 2)
-                bottom_edge = int(center[1] + crop_size / 2)
-                if nbox[1] < top_edge and nbox[3] > bottom_edge:
-                    print(f"nucleus {i} is taller than crop region, bbox: {bbox}, nbox: {nbox}, center: {center}, crop_size: {crop_size}")
-                    continue
-                if nbox[1] < top_edge:
-                    new_top = nbox[1] - nuc_margin
-                    displacement = top_edge - new_top
-                    top_edge = new_top
-                    bottom_edge = bottom_edge - displacement
-                elif nbox[3] > bottom_edge:
-                    new_bottom = nbox[3] + nuc_margin
-                    displacement = new_bottom - bottom_edge
-                    bottom_edge = new_bottom
-                    top_edge = top_edge + displacement
-                slice_y = slice(max(0, top_edge), min(cell_masks.shape[1], bottom_edge))
-                padding_y = (max(0 - top_edge, 0), max(bottom_edge - cell_masks.shape[1], 0))
-            else:
-                slice_y = slice(bbox[1], bbox[3])
-                padding_y = crop_size - height
-                padding_y = (padding_y // 2, padding_y - padding_y // 2)
+        cache_cell_masks, cache_nuclei_masks = cache_cell_masks.astype(int), cache_nuclei_masks.astype(int)
 
-            cell_mask = ((cell_masks[slice_x, slice_y] * np.isin(cell_masks[slice_x, slice_y], i + 1)) > 0)
-            nuclei_mask = ((nuclei_masks[slice_x, slice_y] * np.isin(nuclei_masks[slice_x, slice_y], i + 1)) > 0)
-            cell_image = image[:, slice_x, slice_y] * cell_mask
-            
-            cell_mask = np.pad(cell_mask, (padding_x, padding_y), mode="constant", constant_values=0)
-            nuclei_mask = np.pad(nuclei_mask, (padding_x, padding_y), mode="constant", constant_values=0)
-            cell_image = np.pad(cell_image, ((0, 0), padding_x, padding_y), mode="constant", constant_values=0)
+        seg_images, seg_cell_masks, seg_nuclei_masks = [], [], []
+        for image, cell_masks, nuclei_masks in zip(cache_images, cache_cell_masks, cache_nuclei_masks):
+            region_props = measure.regionprops(cell_masks)
+            if len(region_props) == 0:
+                print(f"No cells found in one of the {image_path} masks")
+                continue
+            nuclear_regions = measure.regionprops(nuclei_masks)
+            bboxes = np.array([x.bbox for x in region_props])
+            bbox_widths = bboxes[:, 2] - bboxes[:, 0]
+            bbox_heights = bboxes[:, 3] - bboxes[:, 1]
+            nuc_bboxes = np.array([x.bbox for x in nuclear_regions])
 
-            cell_mask_list.append(cell_mask)
-            nuclei_mask_list.append(nuclei_mask)
-            image_list.append(cell_image)
+            cell_mask_list = []
+            nuclei_mask_list = []
+            image_list = []
+            for i, (bbox, width, height, nbox) in enumerate(zip(bboxes, bbox_widths, bbox_heights, nuc_bboxes)):
+                center = np.array([np.mean([bbox[0], bbox[2]]), np.mean([bbox[1], bbox[3]])])
+                if width > crop_size:
+                    left_edge = int(center[0] - crop_size / 2)
+                    right_edge = int(center[0] + crop_size / 2)
+                    if nbox[0] < left_edge and nbox[2] > right_edge:
+                        print(f"nucleus {i} is wider than crop region, bbox: {bbox}, nbox: {nbox}, center: {center}, crop_size: {crop_size}")
+                        continue
+                    if nbox[0] < left_edge:
+                        new_left = nbox[0] - nuc_margin
+                        displacement = new_left - left_edge
+                        left_edge = new_left
+                        right_edge = right_edge + displacement
+                    elif nbox[2] > right_edge:
+                        new_right = nbox[2] + nuc_margin
+                        displacement = new_right - right_edge
+                        right_edge = new_right
+                        left_edge = left_edge + displacement
+                    slice_x = slice(max(0, left_edge), min(cell_masks.shape[0], right_edge)) 
+                    padding_x = (max(0 - left_edge, 0), max(right_edge - cell_masks.shape[0], 0))
+                else:
+                    slice_x = slice(bbox[0], bbox[2])
+                    padding_x = crop_size - width
+                    padding_x = (padding_x // 2, padding_x - padding_x // 2)
+                if height > crop_size:
+                    top_edge = int(center[1] - crop_size / 2)
+                    bottom_edge = int(center[1] + crop_size / 2)
+                    if nbox[1] < top_edge and nbox[3] > bottom_edge:
+                        print(f"nucleus {i} is taller than crop region, bbox: {bbox}, nbox: {nbox}, center: {center}, crop_size: {crop_size}")
+                        continue
+                    if nbox[1] < top_edge:
+                        new_top = nbox[1] - nuc_margin
+                        displacement = top_edge - new_top
+                        top_edge = new_top
+                        bottom_edge = bottom_edge - displacement
+                    elif nbox[3] > bottom_edge:
+                        new_bottom = nbox[3] + nuc_margin
+                        displacement = new_bottom - bottom_edge
+                        bottom_edge = new_bottom
+                        top_edge = top_edge + displacement
+                    slice_y = slice(max(0, top_edge), min(cell_masks.shape[1], bottom_edge))
+                    padding_y = (max(0 - top_edge, 0), max(bottom_edge - cell_masks.shape[1], 0))
+                else:
+                    slice_y = slice(bbox[1], bbox[3])
+                    padding_y = crop_size - height
+                    padding_y = (padding_y // 2, padding_y - padding_y // 2)
 
-        cell_masks = np.stack(cell_mask_list, axis=0)
-        nuclei_masks = np.stack(nuclei_mask_list, axis=0)
-        images = np.stack(image_list, axis=0)
+                cell_mask = ((cell_masks[slice_x, slice_y] * np.isin(cell_masks[slice_x, slice_y], i + 1)) > 0)
+                nuclei_mask = ((nuclei_masks[slice_x, slice_y] * np.isin(nuclei_masks[slice_x, slice_y], i + 1)) > 0)
+                cell_image = image[:, slice_x, slice_y] * cell_mask
+                
+                cell_mask = np.pad(cell_mask, (padding_x, padding_y), mode="constant", constant_values=0)
+                nuclei_mask = np.pad(nuclei_mask, (padding_x, padding_y), mode="constant", constant_values=0)
+                cell_image = np.pad(cell_image, ((0, 0), padding_x, padding_y), mode="constant", constant_values=0)
+
+                cell_mask_list.append(cell_mask)
+                nuclei_mask_list.append(nuclei_mask)
+                image_list.append(cell_image)
+
+            cell_masks = np.stack(cell_mask_list, axis=0)
+            nuclei_masks = np.stack(nuclei_mask_list, axis=0)
+            images = np.stack(image_list, axis=0)
+
+            seg_images.append(images)
+            seg_cell_masks.append(cell_masks)
+            seg_nuclei_masks.append(nuclei_masks)
+
+        seg_images = np.concatenate(seg_images, axis=0)
+        seg_cell_masks = np.concatenate(seg_cell_masks, axis=0)
+        seg_nuclei_masks = np.concatenate(seg_nuclei_masks, axis=0)
 
         seg_cell_mask_paths.append(cell_mask_path.parent /"seg_cell_masks.npy")
         seg_nuclei_mask_paths.append(nuclei_mask_path.parent / "seg_nuclei_masks.npy")
         seg_image_paths.append(image_path.parent / "seg_images.npy")
-        np.save(seg_cell_mask_paths[-1], cell_masks)
-        np.save(seg_nuclei_mask_paths[-1], nuclei_masks)
-        np.save(seg_image_paths[-1], images)
+
+        np.save(seg_cell_mask_paths[-1], seg_cell_masks)
+        np.save(seg_nuclei_mask_paths[-1], seg_nuclei_masks)
+        np.save(seg_image_paths[-1], seg_images)
+
     return seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths
 
 channel_min = lambda x: torch.min(torch.min(x, dim=2, keepdim=True)[0], dim=3, keepdim=True)[0]

@@ -12,7 +12,7 @@ from glob import glob
 
 class CellImageDataset(Dataset):
     # images are C x H x W
-    def __init__(self, index_file, channel_colors=None, channels=None):
+    def __init__(self, index_file, channel_colors=None, channels=None, batch_size=500):
         data_dir = Path(index_file).parent
         self.data_dir = data_dir
         self.channel_names = load_channel_names(data_dir)
@@ -20,7 +20,6 @@ class CellImageDataset(Dataset):
         # image_tensors = load_dir_images(index_file)
         from pipeline import load_index_paths
         image_paths, _, _ = load_index_paths(index_file)
-        batch_size = 500
         for i in tqdm(range(0, len(image_paths), batch_size), desc="Loading dataset images"):
             image_tensors = []
             for image_path in image_paths[i:i+batch_size]:

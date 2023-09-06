@@ -4,6 +4,7 @@ import torch.nn as nn
 import numpy as np
 from torch import optim
 import lightning.pytorch as lightning
+from lightning.pytorch.utilities import rank_zero_only
 import wandb
 from typing import Any, Tuple
 from sklearn.metrics import confusion_matrix, accuracy_score
@@ -374,17 +375,26 @@ class RegressorLit(lightning.LightningModule):
         return loss, preds, labels
 
     def _log_image(self, stage, name, ax):
-        fig = ax.get_figure()
+        if type(ax) == sns.JointGrid:
+            fig = ax.figure
+        else:
+            fig = ax.get_figure()
         self.logger.experiment.log({
             f"{stage}/{name}": wandb.Image(fig),
         })
     
+    @rank_zero_only
     def __on_shared_epoch_end(self, preds, labels, stage):
         preds, labels = torch.cat(preds), torch.cat(labels)
+        print("Labels length:", len(labels))
+        print("Labels range:", labels[:, 0].min(), labels[:, 0].max(), labels[:, 1].min(), labels[:, 1].max())
+        print("Preds length:", len(preds))
+        print("Preds range:", preds[:, 0].min(), preds[:, 0].max(), preds[:, 1].min(), preds[:, 1].max())
+        preds = torch.clone(labels)
     
         # plot the intensity kdeplot
         plt.clf()
-        ax = sns.kdeplot(x=preds[:, 0], y=preds[:, 1])
+        ax = sns.jointplot(x=preds[:, 0], y=preds[:, 1], kind="kde")
         self._log_image(stage, "intensity_kde", ax)
 
         # these residuals are 2D, residual for CDT1 and for GMNN
@@ -393,45 +403,50 @@ class RegressorLit(lightning.LightningModule):
         # average residual for all points in that grid square
         # this is a "heatmap" of the residuals across the output space
 
-        preds_color = torch.pow(torch.ones_like(preds) * 10, preds)
-        # print(preds_color.min(), preds_color.max())
+        preds_color = torch.pow(torch.ones_like(preds) * 10, preds) # 10 ** preds
+        print("Preds range", preds_color[:, 0].min(), preds_color[:, 0].max(), preds_color[:, 1].min(), preds_color[:, 1].max())
 
 
         # the actual labels have values that are pretty low, because they're averaged so
-        # we're going to rescale labels accordingly
+        # we're going to rescale labels accordingly (looked at some outputs--Train/Val mix max are (0.02, 0.7), (0.02, 0.9))
+        # so actually not going to rescale, just clip
+        preds_color = torch.clamp(preds_color, min=0.0, max=1.0)
         # by the preds min/max values and then clip before remapping to 0-255
-        labels_color = torch.pow(torch.ones_like(labels) * 10, labels)
-        # print(labels_color.min(), labels_color.max())
-        preds_color = (preds_color - labels_color.min()) / (labels_color.max() - labels_color.min())
+        # labels_color = torch.pow(torch.ones_like(labels) * 10, labels)
+        # print("labels", labels_color.min(), labels_color.max())
+        # preds_color = (preds_color - labels_color.min()) / (labels_color.max() - labels_color.min())
         # print(preds_color.min(), preds_color.max())
 
-        preds_color = preds_color.transpose(0, 1)
+
+        # Add B channel to get RGB colors
+        preds_color = preds_color.transpose(0, 1) # C x B
         preds_color = torch.stack([preds_color[0], preds_color[1], torch.zeros_like(preds_color[0])])
         preds_color = preds_color.transpose(0, 1)
         # print(preds_color.min(), preds_color.max())
 
         # get the grid
         grid_size = 10
-        grid_x = torch.linspace(labels[:, 0].max(), labels[:, 0].min(), grid_size)
-        grid_y = torch.linspace(labels[:, 1].min(), labels[:, 1].max(), grid_size)
-        grid_x, grid_y = torch.meshgrid(grid_x, grid_y)
-        grid = torch.stack([grid_x, grid_y], dim=-1).reshape(-1, 2)
+        vertices_x = torch.linspace(0, 1, grid_size + 1)
+        vertices_y = torch.linspace(0, 1, grid_size + 1)
+
+        vertices_x, vertices_y = torch.log10(vertices_x), torch.log10(vertices_y)
+        vertices_x, vertices_y = torch.meshgrid(vertices_x, vertices_y)
+        vertices = torch.stack([vertices_x, vertices_y], dim=-1).reshape(grid_size + 1, grid_size + 1, 2)
 
         # get the average residual for each grid square
-        grid_residuals = torch.zeros([grid.shape[0], 3])
-        for i, point in enumerate(grid):
-            # get the points in the grid square
-            x_min, x_max = point[0] - 0.5, point[0] + 0.5
-            y_min, y_max = point[1] - 0.5, point[1] + 0.5
-            mask = (labels[:, 0] >= x_min) & (labels[:, 0] < x_max) & (labels[:, 1] >= y_min) & (labels[:, 1] < y_max)
-            if mask.sum() == 0:
-                grid_residuals[i] = torch.ones_like(grid_residuals[i])
-            else:
-                grid_residuals[i] = torch.mean(preds_color[mask], dim=0)
-        grid_residuals = grid_residuals.reshape(grid_size, grid_size, 3)
+        grid_residuals = torch.zeros((grid_size, grid_size, 3))
+        for i in range(grid_size):
+            for j in range(grid_size):
+                x_min, y_min = vertices[i, j]
+                x_max, y_max = vertices[i + 1, j + 1]
+                mask = (labels[:, 0] >= x_min) & (labels[:, 0] < x_max) & (labels[:, 1] >= y_min) & (labels[:, 1] < y_max)
+                if mask.sum() == 0:
+                    grid_residuals[i, j] = torch.ones_like(grid_residuals[i, j])
+                else:
+                    grid_residuals[i, j] = torch.mean(preds_color[mask], dim=0)
+                if (i == 0 and j == 0) or (i == grid_size - 1 and j == grid_size - 1):
+                    print(10 ** x_min, 10 ** x_max, 10 ** y_min, 10 ** y_max)
         grid_residuals = torch.clamp(grid_residuals, 0, 1) * 255
-        # print(grid_residuals.min(), grid_residuals.max())
-        # print(grid_residuals.shape)
 
         # plot the heatmap
         plt.clf()

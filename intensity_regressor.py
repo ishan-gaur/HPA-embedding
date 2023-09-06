@@ -39,16 +39,19 @@ if args.checkpoint is not None:
 # Experiment parameters and logging
 ##########################################################################################
 config = {
-    "batch_size": 32,
-    "devices": [4, 5, 6, 7],
+    # "batch_size": 32,
+    "batch_size": 64,
+    # "devices": [4, 5, 6, 7],
+    "devices": [1, 2, 3],
     "num_workers": 1,
     "split": (0.64, 0.16, 0.2),
     "conv": False,
     "lr": 1e-4,
     "epochs": args.epochs,
     "nf": 16,
-    "n_hidden": 3,
-    "d_hidden": DINO.CLS_DIM * 12,
+    "n_hidden": 1,
+    # "d_hidden": DINO.CLS_DIM * 12,
+    "d_hidden": DINO.CLS_DIM * 4,
     "dropout": False,
     "batchnorm": True,
     "num_classes": 2
@@ -132,11 +135,11 @@ trainer = pl.Trainer(
 print_with_time("Training model...")
 trainer.fit(model, dm)
 
-print_with_time("Testing model...")
-trainer = pl.Trainer(
-    default_root_dir=lightning_dir,
-    accelerator="gpu",
-    devices=config["devices"][-1:],
-    logger=wandb_logger,
-)
-trainer.test(model, dm)
+# print_with_time("Testing model...")
+# trainer = pl.Trainer(
+#     default_root_dir=lightning_dir,
+#     accelerator="gpu",
+#     devices=config["devices"][-1:],
+#     logger=wandb_logger,
+# )
+# trainer.test(model, dm)
