@@ -386,15 +386,33 @@ class RegressorLit(lightning.LightningModule):
     @rank_zero_only
     def __on_shared_epoch_end(self, preds, labels, stage):
         preds, labels = torch.cat(preds), torch.cat(labels)
-        print("Labels length:", len(labels))
-        print("Labels range:", labels[:, 0].min(), labels[:, 0].max(), labels[:, 1].min(), labels[:, 1].max())
-        print("Preds length:", len(preds))
-        print("Preds range:", preds[:, 0].min(), preds[:, 0].max(), preds[:, 1].min(), preds[:, 1].max())
     
         # plot the intensity kdeplot
         plt.clf()
+        plt.title("Predicted Intensity Distribution")
+        plt.xlabel("CDT1 Intensity (log10)")
+        plt.ylabel("GMNN Intensity (log10)")
         ax = sns.jointplot(x=preds[:, 0], y=preds[:, 1], kind="kde")
+        plt.tight_layout()
         self._log_image(stage, "intensity_kde", ax)
+        plt.close()
+
+        # plot the residuals per channel
+        plt.clf()
+        plt.title("CDT1 Residuals")
+        plt.ylabel("Pred - Label (log10)")
+        plt.xlabel("CDT1 Label Intensity (log10)")
+        ax = sns.jointplot(x=labels[:, 0], y=(preds[:, 0] - labels[:, 0]), kind="kde")
+        self._log_image(stage, "residuals_cdt1", ax)
+        plt.close()
+        plt.clf()
+        plt.title("GMNN Residuals")
+        plt.ylabel("Pred - Label (log10)")
+        plt.xlabel("GMNN Label Intensity (log10)")
+        ax = sns.jointplot(x=labels[:, 1], y=(preds[:, 1] - labels[:, 1]), kind="kde")
+        plt.tight_layout()
+        self._log_image(stage, "residuals_gmnn", ax)
+        plt.close()
 
         # these residuals are 2D, residual for CDT1 and for GMNN
         # we want to make a 2D grid in the label intensity space (also a 2D grid)
@@ -403,7 +421,6 @@ class RegressorLit(lightning.LightningModule):
         # this is a "heatmap" of the residuals across the output space
 
         preds_color = torch.pow(torch.ones_like(preds) * 10, preds) # 10 ** preds
-        print("Preds range", preds_color[:, 0].min(), preds_color[:, 0].max(), preds_color[:, 1].min(), preds_color[:, 1].max())
 
         # the actual labels have values that are pretty low, because they're averaged so
         # we're going to rescale labels accordingly (looked at some outputs--Train/Val mix max are (0.02, 0.7), (0.02, 0.9))
@@ -435,16 +452,19 @@ class RegressorLit(lightning.LightningModule):
                     grid_residuals[i, j] = torch.ones_like(grid_residuals[i, j])
                 else:
                     grid_residuals[i, j] = torch.mean(preds_color[mask], dim=0)
-                if (i == 0 and j == 0) or (i == grid_size - 1 and j == grid_size - 1):
-                    print(10 ** x_min, 10 ** x_max, 10 ** y_min, 10 ** y_max)
         grid_residuals = torch.clamp(grid_residuals, 0, 1) * 255
         grid_residuals = grid_residuals.flip(0) # because the y axis is decreasing in the plot
 
         # plot the heatmap
         plt.clf()
+        plt.title("Average Predicted Color binned by Label Intensity")
+        plt.xlabel("CDT1 Label Intensity (log10)")
+        plt.ylabel("GMNN Label Intensity (log10)")
         ax = plt.gca()
+        plt.tight_layout()
         ax.imshow(grid_residuals.int())
         self._log_image(stage, "prediction_map", ax)
+        plt.close()
 
     def training_step(self, batch, batch_idx):
         loss, preds, labels = self.__shared_step(batch, batch_idx, "train")

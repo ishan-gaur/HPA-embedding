@@ -1,9 +1,8 @@
-import sys
 import os
 import time
+from glob import glob
 from pathlib import Path
 import argparse
-from importlib import import_module
 
 import torch
 import lightning.pytorch as pl
@@ -30,25 +29,23 @@ parser.add_argument("-r", "--run", default=time.strftime('%Y_%m_%d_%H_%M'), help
 
 args = parser.parse_args()
 
-if args.checkpoint is not None:
-    if not Path(args.checkpoint).exists():
-        raise ValueError("Checkpoint path does not exist.")
-    print("WARNING: Checkpoint loading not implemented, ignoring...")
-
 ##########################################################################################
 # Experiment parameters and logging
 ##########################################################################################
 config = {
-    # "batch_size": 32,
-    "batch_size": 64,
+    "batch_size": 32,
+    # "batch_size": 64,
+    "devices": [2, 3, 4, 5, 6, 7],
     # "devices": [4, 5, 6, 7],
-    "devices": [1, 2, 3],
+    # "devices": [0],
+    # "devices": [1, 2, 3],
     "num_workers": 1,
     "split": (0.64, 0.16, 0.2),
     "conv": False,
     "lr": 1e-4,
     "epochs": args.epochs,
     "nf": 16,
+    # "n_hidden": 3,
     "n_hidden": 1,
     # "d_hidden": DINO.CLS_DIM * 12,
     "d_hidden": DINO.CLS_DIM * 4,
@@ -64,7 +61,8 @@ def print_with_time(msg):
 
 fucci_path = Path(args.data)
 project_name = f"intensity_conv_regressor" if config["conv"] else f"intensity_dino_regressor"
-log_folder = Path(f"/data/ishang/pseudotime_pred/{project_name}_{args.run}")
+log_dirs_home = Path("/data/ishang/pseudotime_pred/")
+log_folder = log_dirs_home / f"{project_name}_{args.run}"
 if not log_folder.exists():
     os.makedirs(log_folder, exist_ok=True)
 lightning_dir = log_folder / "lightning_logs"
@@ -92,11 +90,27 @@ latest_checkpoint_callback = ModelCheckpoint(dirpath=lightning_dir, save_last=Tr
 # Set up data, model, and trainer
 ##########################################################################################
 
-print_with_time("Setting up data module...")
+if args.checkpoint is not None:
+    chkpt_dir_pattern = f"{log_dirs_home}/*/*/*-{args.checkpoint}/"
+    checkpoint_folder = glob(chkpt_dir_pattern)
+    if len(checkpoint_folder) > 1:
+        raise ValueError(f"Multiple possible checkpoints found: {checkpoint_folder}")
+    if len(checkpoint_folder) == 0:
+        raise ValueError(f"No checkpoint found for glob pattern: {chkpt_dir_pattern}")
+    args.checkpoint = Path(checkpoint_folder[0]).parent.parent / "lightning_logs" / "last.ckpt"
+    if not args.checkpoint.exists():
+        raise ValueError(f"Checkpoint path {args.checkpoint} does not exist")
+
+print_with_time("Setting up model and data module...")
 if not config["conv"]:
     dm = RefChannelIntensityDM(fucci_path, args.name, config["batch_size"], config["num_workers"], config["split"])
-    model = RegressorLit(d_input=DINO.CLS_DIM, d_output=NUM_CLASSES, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
-                          dropout=config["dropout"], batchnorm=["batchnorm"], lr=config["lr"])
+    if args.checkpoint is None:
+        print("Training from scratch")
+        model = RegressorLit(d_input=DINO.CLS_DIM, d_output=NUM_CLASSES, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
+                            dropout=config["dropout"], batchnorm=["batchnorm"], lr=config["lr"])
+    else:
+        print(f"Loading checkpoint from {args.checkpoint}")
+        model = RegressorLit.load_from_checkpoint(args.checkpoint)
 else:
     raise NotImplementedError("Convolutional regressor not implemented yet")
     # dm = RefChannelCellCycle(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"],
