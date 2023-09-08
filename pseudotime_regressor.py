@@ -8,8 +8,8 @@ import torch
 import lightning.pytorch as pl
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
-from models import RegressorLit, DINO
-from data import RefChannelIntensityDM
+from models import PseudoRegressorLit, DINO
+from data import RefChannelPseudoDM
 
 
 ##########################################################################################
@@ -32,13 +32,16 @@ args = parser.parse_args()
 ##########################################################################################
 # Experiment parameters and logging
 ##########################################################################################
+HPA = True
+DINO_INPUT = 768 if HPA else DINO.CLS_DIM
 config = {
-    # "batch_size": 32,
-    "batch_size": 64,
-    "devices": [4, 5, 6, 7],
+    "HPA": HPA,
+    "batch_size": 32,
+    # "batch_size": 64,
     # "devices": [4, 5, 6, 7],
-    # "devices": [0],
-    # "devices": [1, 2, 3],
+    "devices": [0],
+    # "devices": [7],
+    # "devices": [0, 1, 2, 3, 4],
     "num_workers": 1,
     "split": (0.64, 0.16, 0.2),
     "conv": False,
@@ -47,11 +50,11 @@ config = {
     "nf": 16,
     # "n_hidden": 3,
     "n_hidden": 1,
-    # "d_hidden": DINO.CLS_DIM * 12,
-    "d_hidden": DINO.CLS_DIM * 8,
+    # "d_hidden": DINO_INPUT * 12,
+    "d_hidden": DINO_INPUT * 4,
     "dropout": True,
     "batchnorm": True,
-    "num_classes": 2
+    "num_classes": 1
 }
 
 NUM_CHANNELS, NUM_CLASSES = 2, config["num_classes"]
@@ -60,7 +63,7 @@ def print_with_time(msg):
     print(f"[{time.strftime('%m/%d/%Y @ %H:%M')}] {msg}")
 
 fucci_path = Path(args.data)
-project_name = f"intensity_conv_regressor" if config["conv"] else f"intensity_dino_regressor"
+project_name = f"pseudo_conv_regressor" if config["conv"] else f"pseudo_dino_regressor"
 log_dirs_home = Path("/data/ishang/pseudotime_pred/")
 log_folder = log_dirs_home / f"{project_name}_{args.run}"
 if not log_folder.exists():
@@ -103,14 +106,14 @@ if args.checkpoint is not None:
 
 print_with_time("Setting up model and data module...")
 if not config["conv"]:
-    dm = RefChannelIntensityDM(fucci_path, args.name, config["batch_size"], config["num_workers"], config["split"])
+    dm = RefChannelPseudoDM(fucci_path, args.name, config["batch_size"], config["num_workers"], config["split"], HPA=config["HPA"])
     if args.checkpoint is None:
         print("Training from scratch")
-        model = RegressorLit(d_input=DINO.CLS_DIM, d_output=NUM_CLASSES, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
+        model = PseudoRegressorLit(d_input=DINO_INPUT, d_output=NUM_CLASSES, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
                             dropout=config["dropout"], batchnorm=["batchnorm"], lr=config["lr"])
     else:
         print(f"Loading checkpoint from {args.checkpoint}")
-        model = RegressorLit.load_from_checkpoint(args.checkpoint)
+        model = PseudoRegressorLit.load_from_checkpoint(args.checkpoint)
 else:
     raise NotImplementedError("Convolutional regressor not implemented yet")
     # dm = RefChannelCellCycle(Path(args.data), args.name, config["batch_size"], config["num_workers"], config["split"],
@@ -130,6 +133,7 @@ print_with_time("Setting up trainer...")
 
 trainer = pl.Trainer(
     default_root_dir=lightning_dir,
+    # accelerator="cpu",
     accelerator="gpu",
     devices=config["devices"],
     # strategy=DDPStrategy(find_unused_parameters=True),

@@ -105,6 +105,8 @@ elif config.norm_strategy == 'spline':
     else:
         from well_normalization import buckets
     NORM_SUFFIX = f"{config.norm_strategy}_{buckets}"
+else:
+    NORM_SUFFIX = config.norm_strategy
 NORM_INDEX = DATA_DIR / f"{CLEAN_INDEX.stem if config.sharpness_threshold is None else SHARP_INDEX.stem}_norm_{NORM_SUFFIX}.csv"
 
 NAME_INDEX = DATA_DIR / f"index_{args.name}.csv"

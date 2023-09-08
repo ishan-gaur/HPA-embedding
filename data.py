@@ -284,3 +284,49 @@ class RefChannelIntensityDM(LightningDataModule):
     
     def test_dataloader(self):
         return self.__shared_dataloader(self.test_dataset)
+
+class RefChannelPseudo(Dataset):
+    def __init__(self, data_dir, data_name, HPA=False):
+        if not HPA:
+            self.X = torch.load(data_dir / f"ref_embeddings_{data_name}.pt")
+            print(f"Loaded ref_embeddings_{data_name}.pt")
+        else:
+            self.X = torch.load(data_dir / f"HPA_DINO_cls_{data_name}.pt")
+            print(f"Loaded HPA_DINO_cls_{data_name}.pt")
+        self.Y = torch.tensor(np.load(data_dir / f"FUCCI_pseudotime_{data_name}.npy")).flatten()
+        self.X, self.Y = self.X.float(), self.Y.float()
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.Y[idx]
+
+    def __len__(self):
+        return len(self.X)
+
+class RefChannelPseudoDM(LightningDataModule):
+    """
+    Data module for training a classifier on top of DINO embeddings of DAPI+TUBL reference channels
+    Trying to match labels from a GMM or Ward cluster labeling algorithm of the FUCCI channel intensities
+    """
+    def __init__(self, data_dir, data_name, batch_size, num_workers, split, HPA=False):
+        super().__init__()
+        self.data_dir = data_dir
+        self.data_name = data_name
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.split = split
+
+        dataset = RefChannelPseudo(self.data_dir, self.data_name, HPA=HPA)
+        generator = torch.Generator().manual_seed(420)
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, self.split, generator=generator)
+
+    def __shared_dataloader(self, dataset, shuffle=False):
+        return DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, persistent_workers=True, shuffle=shuffle)
+
+    def train_dataloader(self):
+        return self.__shared_dataloader(self.train_dataset, shuffle=True)
+    
+    def val_dataloader(self):
+        return self.__shared_dataloader(self.val_dataset)
+    
+    def test_dataloader(self):
+        return self.__shared_dataloader(self.test_dataset)
