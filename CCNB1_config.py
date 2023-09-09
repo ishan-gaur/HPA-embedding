@@ -1,3 +1,4 @@
+grouping = -1
 """
 Channel Specification
 
@@ -55,11 +56,11 @@ output_image_size: pixel size of the output image (after resizing)
 """
 cutoff = 256 * 3
 nuc_margin = 50
-output_image_size = 256
+output_image_size = 256 * 3
 
 """
 Sharpness Filtering
 sharpness_threshold: threshold for sharpness filtering (float); if None, no filtering is done
 """
-sharpness_threshold = 0.008
+sharpness_threshold = 1250
 # sharpness_threshold = None

@@ -315,9 +315,10 @@ class RefChannelPseudoDM(LightningDataModule):
         self.num_workers = num_workers
         self.split = split
 
-        dataset = RefChannelPseudo(self.data_dir, self.data_name, HPA=HPA)
+        self.dataset = RefChannelPseudo(self.data_dir, self.data_name, HPA=HPA)
         generator = torch.Generator().manual_seed(420)
-        self.train_dataset, self.val_dataset, self.test_dataset = random_split(dataset, self.split, generator=generator)
+        self.train_dataset, self.val_dataset, self.test_dataset = random_split(self.dataset, self.split, generator=generator)
+        self.split_indices = {"train": self.train_dataset.indices, "val": self.val_dataset.indices, "test": self.test_dataset.indices}
 
     def __shared_dataloader(self, dataset, shuffle=False):
         return DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, persistent_workers=True, shuffle=shuffle)

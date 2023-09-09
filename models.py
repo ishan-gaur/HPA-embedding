@@ -540,29 +540,34 @@ class PseudoRegressor(nn.Module):
             self.model.append(nn.Dropout(0.2))
         self.model.append(nn.Linear(d_hidden, d_output))
         # self.model.append(nn.GELU())
-        self.model.append(nn.Sigmoid())
+        # self.model.append(nn.Sigmoid())
 
     def forward(self, x):
         return self.model(x)
 
-    def cart_distance(y_pred, y):
-        theta_pred = 2 * torch.pi * (y_pred - 0.5)
-        theta = 2 * torch.pi * (y - 0.5)
+    def cart_distance(theta_pred, y):
+        theta = 2 * torch.pi * y
         xy_pred = torch.stack([torch.cos(theta_pred), torch.sin(theta_pred)], dim=-1)
         xy = torch.stack([torch.cos(theta), torch.sin(theta)], dim=-1)
         return torch.norm(xy_pred - xy, dim=-1)
 
-    def arc_distance(y_pred, y):
-        theta_pred = 2 * torch.pi * (y_pred - 0.5)
-        theta = 2 * torch.pi * (y - 0.5)
+    def arc_distance(theta_pred, y):
+        theta_pred = torch.clone(theta_pred).remainder(2 * torch.pi)
+        # print("theta_pred", theta_pred.min(), theta_pred.max())
+        theta = 2 * torch.pi * y
+        # print("theta", theta.min(), theta.max())
+        # assert torch.abs(theta_pred - theta).max() <= 2 * torch.pi, f"{torch.abs(theta_pred - theta).max()}"
         return torch.where(
             torch.abs(theta - theta_pred) > torch.pi,
             (2 * torch.pi - torch.abs(theta - theta_pred)) * torch.sign(theta - theta_pred),
             theta - theta_pred
         ) / (2 * torch.pi)
 
-    def loss(self, y_pred, y):
-        return torch.mean(torch.pow(PseudoRegressor.arc_distance(y_pred, y), 2))
+    def cart_loss(self, theta_pred, y):
+        return torch.mean(PseudoRegressor.cart_distance(theta_pred, y))
+
+    def arc_loss(self, theta_pred, y):
+        return torch.mean(torch.pow(PseudoRegressor.arc_distance(theta_pred, y), 2))
 
 
 class PseudoRegressorLit(RegressorLit):
@@ -581,6 +586,7 @@ class PseudoRegressorLit(RegressorLit):
         lr: float = 1e-4,
         dropout: bool = False,
         batchnorm: bool = False,
+        loss_type: str = "arc",
     ):
         super().__init__()
         if d_hidden is None:
@@ -592,15 +598,19 @@ class PseudoRegressorLit(RegressorLit):
         self.train_preds, self.val_preds, self.test_preds = [], [], []
         self.train_labels, self.val_labels, self.test_labels = [], [], []
         self.num_classes = d_output
+        self.loss_type = loss_type
 
     def _shared_step(self, batch, batch_idx, stage):
         x, y = batch
-        y_pred = self(x)
-        y_pred = y_pred.squeeze()
+        theta_pred = self(x)
+        theta_pred = theta_pred.squeeze()
         y = y.squeeze()
-        loss = self.model.loss(y_pred, y)
-        preds, labels = y_pred.detach().cpu(), y.detach().cpu()
-        self.log(f"{stage}/loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        cart_loss = self.model.cart_loss(theta_pred, y)
+        arc_loss = self.model.arc_loss(theta_pred, y)
+        preds, labels = theta_pred.detach().cpu(), y.detach().cpu()
+        self.log(f"{stage}/loss", arc_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        self.log(f"{stage}/cart_loss", cart_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        loss = cart_loss if self.loss_type == "cart" else arc_loss
         return loss, preds, labels
 
     @rank_zero_only
@@ -613,15 +623,29 @@ class PseudoRegressorLit(RegressorLit):
         plt.title("Predicted Pseudotime Distribution")
         plt.xlabel("Pseudotime")
         plt.ylabel("Counts")
-        ax = sns.histplot(preds, bins=50)
+        # print("preds", preds.min(), preds.max())
+        preds_pseudotime = preds.remainder(2 * torch.pi)
+        # print("after mod", preds_pseudotime[preds.argmin()], preds_pseudotime[preds.argmax()])
+        # print("new endpoints", preds_pseudotime.min(), preds_pseudotime.max())
+        preds_pseudotime = preds_pseudotime / (2 * torch.pi)
+        # print("after rescale", preds_pseudotime[preds_pseudotime.argmin()], preds_pseudotime[preds_pseudotime.argmax()])
+        # print("after rescale", preds_pseudotime.min(), preds_pseudotime.max())
+        # assert preds_pseudotime.min() >= 0 and preds_pseudotime.max() <= 1, f"{preds_pseudotime.min()} {preds_pseudotime.max()}"
+        ax = sns.histplot(preds_pseudotime, bins=50)
         plt.tight_layout()
         super()._log_image(stage, "pseudotime_hist", ax)
+        plt.close()
+
+        plt.clf()
+        ax = sns.histplot(preds, bins=50)
+        plt.tight_layout()
+        super()._log_image(stage, "preds_raw_hist", ax)
         plt.close()
 
         # plot the residuals
         plt.clf()
         plt.title("Residuals")
-        plt.ylabel("Pred - Label")
+        plt.ylabel("Label - Pred")
         plt.xlabel("Label Pseudotime")
         residuals = PseudoRegressor.arc_distance(preds, labels)
         ax = sns.jointplot(x=labels, y=residuals, kind="hist")

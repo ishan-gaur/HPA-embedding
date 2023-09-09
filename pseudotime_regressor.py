@@ -33,13 +33,17 @@ args = parser.parse_args()
 # Experiment parameters and logging
 ##########################################################################################
 HPA = True
+CART = True
 DINO_INPUT = 768 if HPA else DINO.CLS_DIM
 config = {
     "HPA": HPA,
+    "loss_type": "cart" if CART else "arc",
     "batch_size": 32,
     # "batch_size": 64,
-    # "devices": [4, 5, 6, 7],
-    "devices": [0],
+    # "devices": [0, 1, 2, 3, 4, 5, 6, 7],
+    # "devices": [0, 1, 2, 3],
+    "devices": [4, 5, 6, 7],
+    # "devices": [0],
     # "devices": [7],
     # "devices": [0, 1, 2, 3, 4],
     "num_workers": 1,
@@ -48,11 +52,11 @@ config = {
     "lr": 1e-4,
     "epochs": args.epochs,
     "nf": 16,
-    # "n_hidden": 3,
     "n_hidden": 1,
+    # "n_hidden": 1,
     # "d_hidden": DINO_INPUT * 12,
     "d_hidden": DINO_INPUT * 4,
-    "dropout": True,
+    "dropout": False,
     "batchnorm": True,
     "num_classes": 1
 }
@@ -110,7 +114,7 @@ if not config["conv"]:
     if args.checkpoint is None:
         print("Training from scratch")
         model = PseudoRegressorLit(d_input=DINO_INPUT, d_output=NUM_CLASSES, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
-                            dropout=config["dropout"], batchnorm=["batchnorm"], lr=config["lr"])
+                            dropout=config["dropout"], batchnorm=["batchnorm"], lr=config["lr"], loss_type=config["loss_type"])
     else:
         print(f"Loading checkpoint from {args.checkpoint}")
         model = PseudoRegressorLit.load_from_checkpoint(args.checkpoint)
