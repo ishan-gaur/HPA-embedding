@@ -44,7 +44,7 @@ rm_border
     True: remove cells whose nuclei touch the image border
 remove_size: remove cells whose bounding box area is smaller than this value (integer)
 """
-rm_border = False
+rm_border = True
 remove_size = 1000
 
 """

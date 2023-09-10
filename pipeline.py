@@ -381,8 +381,12 @@ def clean_and_save_masks(
     num_removed = 0
     new_cell_paths, new_nuclei_paths = [], []
     for (cell_mask_path, nuclei_mask_path) in tqdm(list(zip(cell_mask_paths, nuclei_mask_paths)), desc="Cleaning masks"):
-        cell_mask = np.load(cell_mask_path).squeeze()
-        nuclei_mask = np.load(nuclei_mask_path).squeeze()
+        cell_mask = np.load(cell_mask_path)
+        nuclei_mask = np.load(nuclei_mask_path)
+        if cell_mask.ndim == 2:
+            cell_mask = np.expand_dims(cell_mask, axis=0)
+        if nuclei_mask.ndim == 2:
+            nuclei_mask = np.expand_dims(nuclei_mask, axis=0)
         assert set(np.unique(nuclei_mask)) == set(np.unique(cell_mask)), f"Mask mismatch before cleaning, nuclei: {np.unique(nuclei_mask)}, cell: {np.unique(cell_mask)}"
         for i in range(len(nuclei_mask)):
             num_original += len(np.unique(nuclei_mask[i]))
@@ -414,6 +418,12 @@ def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_
         cache_images = np.load(image_path)
         cache_cell_masks = np.load(cell_mask_path)
         cache_nuclei_masks = np.load(nuclei_mask_path)
+        if cache_images.ndim == 3:
+            cache_images = np.expand_dims(cache_images, axis=0)
+        if cache_cell_masks.ndim == 2:
+            cache_cell_masks = np.expand_dims(cache_cell_masks, axis=0)
+        if cache_nuclei_masks.ndim == 2:
+            cache_nuclei_masks = np.expand_dims(cache_nuclei_masks, axis=0)
 
         assert (cache_cell_masks.astype(int).astype(cache_cell_masks.dtype) == cache_cell_masks).all(), f"Cell masks are not integers, {cell_masks.dtype}"
         assert (cache_nuclei_masks.astype(int).astype(cache_nuclei_masks.dtype) == cache_nuclei_masks).all(), f"Nuclei masks are not integers, {nuclei_masks.dtype}"
@@ -502,6 +512,9 @@ def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_
             seg_cell_masks.append(cell_masks)
             seg_nuclei_masks.append(nuclei_masks)
 
+        if len(seg_images) == 0:
+            print(f"No cells found in {image_path}")
+            continue
         seg_images = np.concatenate(seg_images, axis=0)
         seg_cell_masks = np.concatenate(seg_cell_masks, axis=0)
         seg_nuclei_masks = np.concatenate(seg_nuclei_masks, axis=0)
@@ -523,11 +536,19 @@ def resize(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths, target_d
     target_dim = (target_dim, target_dim)
     final_image_paths, final_cell_mask_paths, final_nuclei_mask_paths = [], [], []
     for (seg_image_path, seg_cell_mask_path, seg_nuclei_mask_path) in tqdm(list(zip(seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths)), desc="Resizing images"):
-        images = np.load(seg_image_path).squeeze() # B x C x H x W
-        images = np.transpose(images, (0, 2, 3, 1)) # B x H x W x C
-        cell_masks = np.load(seg_cell_mask_path).squeeze() # B x H x W
-        nuclei_masks = np.load(seg_nuclei_mask_path).squeeze() # B x H x W
+        images = np.load(seg_image_path) # B x C x H x W
+        cell_masks = np.load(seg_cell_mask_path) # B x H x W
+        nuclei_masks = np.load(seg_nuclei_mask_path) # B x H x W
+
+        if images.ndim == 3:
+            images = np.expand_dims(images, axis=0)
+        if cell_masks.ndim == 2:
+            cell_masks = np.expand_dims(cell_masks, axis=0)
+        if nuclei_masks.ndim == 2:
+            nuclei_masks = np.expand_dims(nuclei_masks, axis=0)
         
+        images = np.transpose(images, (0, 2, 3, 1)) # B x H x W x C
+
         resized_images, resized_cell_masks, resized_nuclei_masks = [], [], []
         for image, cell_mask, nuclei_mask in zip(images, cell_masks, nuclei_masks):
             resized_images.append(cv2.resize(image, dsize=target_dim, interpolation=resize_type))
