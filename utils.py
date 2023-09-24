@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from tqdm import tqdm
 
 silent = False
 
@@ -119,3 +120,48 @@ def image_cells_sharpness(image, cell_mask):
     sharpness_levels[0] = None
     assert len(sharpness_levels) == cell_mask.max().astype(int) + 1
     return sharpness_levels
+
+
+def two_sig_fig_floor(x):
+    return torch.floor(x / torch.pow(10.0, torch.floor(torch.log10(x)) - 1)) * torch.pow(10.0, torch.floor(torch.log10(x)) - 1)
+
+
+def get_intensity_metrics(images, cell_masks, nuclei_masks, batch_size=32):
+    # Gather intensity and non-zero pixel counts
+    intensity_sums, nuclear_intensity_sums, cell_pixel_ct, nucleus_pixel_ct = [], [], [], []
+    for i in tqdm(range(0, len(images), batch_size), desc="Computing mean intensities"):
+        batch = images[i:i+batch_size]
+        cell_mask_batch = cell_masks[i:i+batch_size, None]
+        nuclei_mask_batch = nuclei_masks[i:i+batch_size, None]
+
+        intensity_sums.append(torch.sum(batch, dim=(2, 3)))
+        nuclear_intensity_sums.append(torch.sum(batch * (nuclei_mask_batch > 0), dim=(2, 3)))
+        cell_pixel_ct.append(torch.sum(cell_mask_batch > 0, dim=(2, 3)))
+        nucleus_pixel_ct.append(torch.sum(nuclei_mask_batch > 0, dim=(2, 3)))
+
+    intensity_sums = torch.cat(intensity_sums, dim=0)
+    nuclear_intensity_sums = torch.cat(nuclear_intensity_sums, dim=0)
+    cell_pixel_ct = torch.cat(cell_pixel_ct, dim=0)
+    nucleus_pixel_ct = torch.cat(nucleus_pixel_ct, dim=0)
+
+    # calculate epsilon for each term
+    non_zero_cells = intensity_sums > 0
+    non_zero_nucs = nuclear_intensity_sums > 0
+    epsilon_int, epsilon_nuc_int, epsilon_cell_ct, epsilon_nuc_ct = [], [], [], []
+    for i in range(intensity_sums.shape[1]):
+        epsilon_int.append(two_sig_fig_floor(torch.min(intensity_sums[non_zero_cells[:, i], i])))
+        epsilon_nuc_int.append(two_sig_fig_floor(torch.min(nuclear_intensity_sums[non_zero_nucs[:, i], i])))
+    # epsilon_cell_ct.append(two_sig_fig_floor(torch.min(cell_pixel_ct[non_zero_cells[:, 0], 0])))
+    # epsilon_nuc_ct.append(two_sig_fig_floor(torch.min(nucleus_pixel_ct[non_zero_nucs[:, 0], 0])))
+
+    epsilon_int = torch.stack(epsilon_int, dim=0)
+    epsilon_nuc_int = torch.stack(epsilon_nuc_int, dim=0)
+    # epsilon_cell_ct = torch.stack(epsilon_cell_ct, dim=0)
+    # epsilon_nuc_ct = torch.stack(epsilon_nuc_ct, dim=0)
+
+    intensity_sums = intensity_sums + (epsilon_int * (~non_zero_cells))
+    nuclear_intensity_sums = nuclear_intensity_sums + (epsilon_nuc_int * (~non_zero_nucs))
+    # cell_pixel_ct = cell_pixel_ct + (epsilon_cell_ct * (~non_zero_cells))
+    # nucleus_pixel_ct = nucleus_pixel_ct + (epsilon_nuc_ct * (~non_zero_nucs))
+
+    return intensity_sums, nuclear_intensity_sums, cell_pixel_ct, nucleus_pixel_ct

@@ -220,7 +220,12 @@ if args.normalize or args.all:
         print("Index file already exists, skipping. Set --rebuild to overwrite.")
     else:
         assert SHARP_INDEX.exists() or CLEAN_INDEX.exists(), "Index file does not exist, run --image_mask_cache (and optionally --clean_masks) first"
-        SRC_INDEX = SHARP_INDEX if config.sharpness_threshold is not None else CLEAN_INDEX
+        if config.sharpness_threshold is not None:
+            print("Using sharpness filtered images")
+            SRC_INDEX = SHARP_INDEX
+        else:
+            print("Using cleaned images")
+            SRC_INDEX = CLEAN_INDEX
         assert SRC_INDEX.exists(), "Index file does not exist, run --filter_sharpness (and optionally --clean_masks) first"
         assert config.norm_strategy is not None, "Normalization strategy not set in config"
 

@@ -413,7 +413,11 @@ def clean_and_save_masks(
 
 def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_margin=50):
     # images need to be C x H x W
+
+    # CACHE FILE LEVEL ITERATION
+    # print(f"Found {len(image_paths)} cache files")
     seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths = [], [], []
+    total_cells = 0
     for (image_path, cell_mask_path, nuclei_mask_path) in tqdm(list(zip(image_paths, cell_mask_paths, nuclei_mask_paths)), desc="Cropping images"):
         cache_images = np.load(image_path)
         cache_cell_masks = np.load(cell_mask_path)
@@ -430,6 +434,8 @@ def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_
 
         cache_cell_masks, cache_nuclei_masks = cache_cell_masks.astype(int), cache_nuclei_masks.astype(int)
 
+        # IMAGE LEVEL ITERATION
+        # print(f"Found {len(cache_images)} images in {image_path}")
         seg_images, seg_cell_masks, seg_nuclei_masks = [], [], []
         for image, cell_masks, nuclei_masks in zip(cache_images, cache_cell_masks, cache_nuclei_masks):
             region_props = measure.regionprops(cell_masks)
@@ -442,6 +448,8 @@ def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_
             bbox_heights = bboxes[:, 3] - bboxes[:, 1]
             nuc_bboxes = np.array([x.bbox for x in nuclear_regions])
 
+            # SINGLE CELL LEVEL ITERATION
+            # print(f"Found {len(bboxes)} cells in {image_path}")
             cell_mask_list = []
             nuclei_mask_list = []
             image_list = []
@@ -515,9 +523,15 @@ def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_
         if len(seg_images) == 0:
             print(f"No cells found in {image_path}")
             continue
+
+        total_cells += len(seg_images)
+        # print(f"Found {len(seg_images)} cells in {image_path}")
+
         seg_images = np.concatenate(seg_images, axis=0)
         seg_cell_masks = np.concatenate(seg_cell_masks, axis=0)
         seg_nuclei_masks = np.concatenate(seg_nuclei_masks, axis=0)
+
+        # print(seg_images.shape)
 
         seg_cell_mask_paths.append(cell_mask_path.parent /"seg_cell_masks.npy")
         seg_nuclei_mask_paths.append(nuclei_mask_path.parent / "seg_nuclei_masks.npy")
@@ -526,6 +540,8 @@ def crop_images(image_paths, cell_mask_paths, nuclei_mask_paths, crop_size, nuc_
         np.save(seg_cell_mask_paths[-1], seg_cell_masks)
         np.save(seg_nuclei_mask_paths[-1], seg_nuclei_masks)
         np.save(seg_image_paths[-1], seg_images)
+
+    # print(f"Total cells: {total_cells}")
 
     return seg_image_paths, seg_cell_mask_paths, seg_nuclei_mask_paths
 
@@ -638,15 +654,21 @@ def normalize_images(image_paths, cell_masks_paths, norm_strategy, norm_min, nor
         batch_mask_paths = cell_masks_paths[i:min(i+batch_size, len(image_paths))]
         images = []
         masks = []
+        ranges = [0]
         for image_path, cell_path in zip(batch_paths, batch_mask_paths):
-            images.append(np.load(image_path))
+            batch_elem_images = np.load(image_path)
+            ranges.append(ranges[-1] + len(batch_elem_images))
+            images.append(batch_elem_images)
             masks.append(np.load(cell_path))
         images = np.concatenate(images, axis=0)
         masks = np.concatenate(masks, axis=0)[:, None, ...]
         images = images * (masks > 0)
 
+        # print(f"Found {len(images)} images in batch {i}")
+
         if norm_strategy == "min_max":
             images = min_max_normalization(images, stats=False)
+            # print(f"Found {len(images)} after norm")
         elif norm_strategy == "percentile":
             if norm_min is None or norm_max is None:
                 raise ValueError("Must provide norm_min and norm_max for percentile normalization")
@@ -666,10 +688,12 @@ def normalize_images(image_paths, cell_masks_paths, norm_strategy, norm_min, nor
             sample_images = sample_images[:, None, ...]
             save_image_grid(sample_images, path, nrow=image.shape[0], cmaps=None)
 
+        # print(images.shape)
         for j, path in enumerate(batch_paths):
             if norm_suffix is not None:
                 path = path.parent / (f"{path.stem}{norm_suffix}" + path.suffix)
-            np.save(path, images[j])
+            # print(f"Saving {j}: {ranges[j]} to {ranges[j+1]}")
+            np.save(path, images[ranges[j]:ranges[j+1]])
             paths.append(path)
     return paths
 
@@ -711,6 +735,7 @@ def filter_masks_by_sharpness(image_paths, cell_mask_paths, nuclei_mask_paths, t
         images = np.load(images_path).astype("float32")
         cell_masks = np.load(cell_mask_path).astype("float32")
         nuclei_masks = np.load(nuclei_mask_path).astype("float32")
+        print(f"Found {len(images)} images in {images_path}")
         for i in range(len(images)):
             image, cell_mask = images[i, (dapi, tubl)], cell_masks[i] # sharpness only on dapi and tubl to generalize better
             num_cells = len(np.unique(cell_mask)) - 1 # -1 because the background is 0
@@ -731,6 +756,7 @@ def filter_masks_by_sharpness(image_paths, cell_mask_paths, nuclei_mask_paths, t
             save_image(torch.tensor(image * ((new_mask == 0) & (old_mask != 0))), new_cell_path.parent / f"sharp_removed_{new_cell_path.stem}.png", cmaps)
         np.save(new_cell_path, cell_masks)
         np.save(new_nuclei_path, nuclei_masks)
+        print(f"{sum([len(np.unique(x)) - 1 for x in cell_masks])} cells left after filtering for {images_path}")
         new_cell_path = new_cell_path.parent / (new_cell_path.stem + ".npy")
         new_nuclei_path = new_nuclei_path.parent / (new_nuclei_path.stem + ".npy")
         new_cell_paths.append(new_cell_path)
