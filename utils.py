@@ -165,3 +165,89 @@ def get_intensity_metrics(images, cell_masks, nuclei_masks, batch_size=32):
     # nucleus_pixel_ct = nucleus_pixel_ct + (epsilon_nuc_ct * (~non_zero_nucs))
 
     return intensity_sums, nuclear_intensity_sums, cell_pixel_ct, nucleus_pixel_ct
+
+
+def get_intensity_metrics_sc(images, batch_size=32):
+    # Gather intensity and non-zero pixel counts
+    intensity_sums, pixel_ct = [], []
+    for i in tqdm(range(0, len(images), batch_size), desc="Computing mean intensities"):
+        batch = images[i:min(i+batch_size, len(images))]
+        intensity_sums.append(torch.sum(batch, dim=(2, 3)))
+        pixel_ct.append(torch.sum(batch > 0, dim=(2, 3)))
+
+    intensity_sums = torch.cat(intensity_sums, dim=0)
+    pixel_ct = torch.cat(pixel_ct, dim=0)
+
+    # calculate epsilon for each term
+    non_zero_cells = intensity_sums > 0
+    non_empty_cells = pixel_ct > 0
+    epsilon_int, epsilon_ct = [], []
+    for i in range(intensity_sums.shape[1]):
+        epsilon_int.append(two_sig_fig_floor(torch.min(intensity_sums[non_zero_cells[:, i], i])))
+        epsilon_ct.append(two_sig_fig_floor(torch.min(pixel_ct[non_empty_cells[:, i], i])))
+
+    epsilon_int = torch.stack(epsilon_int, dim=0)
+    epsilon_ct = torch.stack(epsilon_ct, dim=0)
+    intensity_sums = intensity_sums + (epsilon_int * (~non_zero_cells))
+    pixel_ct = pixel_ct + (epsilon_ct * (~non_empty_cells))
+
+    return intensity_sums, pixel_ct
+
+
+from cc_pseudotime import f_2
+from scipy.optimize import least_squares
+def intensities_to_polar_pseudotime(log_intensities, center=None):
+    if center is None:
+        center_estimate = np.mean(log_intensities, axis=0)
+        center_est2 = least_squares(f_2, center_estimate, args=(log_intensities[:, 0], log_intensities[:, 1]))
+        center = center_est2.x
+    centered_intensities = log_intensities - center
+    r = np.sqrt(np.sum(centered_intensities ** 2, axis=1))
+    theta = np.arctan2(centered_intensities[:, 1], centered_intensities[:, 0])
+    polar = np.stack([r, theta], axis=-1)
+    fucci_time = calculate_pseudotime(polar.T, centered_intensities)
+    return fucci_time
+
+from cc_pseudotime import stretch_time
+import matplotlib.pyplot as plt
+
+def calculate_pseudotime(pol_data, centered_data, save_dir=""):
+    pol_sort_inds = np.argsort(pol_data[1])
+    pol_sort_rho = pol_data[0][pol_sort_inds]
+    pol_sort_phi = pol_data[1][pol_sort_inds]
+    centered_data_sort0 = centered_data[pol_sort_inds, 0]
+    centered_data_sort1 = centered_data[pol_sort_inds, 1]
+
+    # Rezero to minimum --resoning, cells disappear during mitosis, so we should have the fewest detected cells there
+    bins = plt.hist(pol_sort_phi, 1000)
+    plt.close()
+    start_phi = bins[1][np.argmin(bins[0])]
+
+    # Move those points to the other side
+    more_than_start = np.greater(pol_sort_phi, start_phi)
+    less_than_start = np.less_equal(pol_sort_phi, start_phi)
+    pol_sort_rho_reorder = np.concatenate(
+        (pol_sort_rho[more_than_start], pol_sort_rho[less_than_start])
+    )
+    pol_sort_inds_reorder = np.concatenate(
+        (pol_sort_inds[more_than_start], pol_sort_inds[less_than_start])
+    )
+    pol_sort_phi_reorder = np.concatenate(
+        (pol_sort_phi[more_than_start], pol_sort_phi[less_than_start] + np.pi * 2)
+    )
+    pol_sort_centered_data0 = np.concatenate(
+        (centered_data_sort0[more_than_start], centered_data_sort0[less_than_start])
+    )
+    pol_sort_centered_data1 = np.concatenate(
+        (centered_data_sort1[more_than_start], centered_data_sort1[less_than_start])
+    )
+    pol_sort_shift = pol_sort_phi_reorder + np.abs(np.min(pol_sort_phi_reorder))
+
+    # Shift and re-scale "time"
+    # reverse "time" since the cycle goes counter-clockwise wrt the fucci plot
+    pol_sort_norm = pol_sort_shift / np.max(pol_sort_shift)
+    pol_sort_norm_rev = 1 - pol_sort_norm
+    pol_sort_norm_rev = stretch_time(pol_sort_norm_rev)
+    pol_unsort = np.argsort(pol_sort_inds_reorder)
+    fucci_time = pol_sort_norm_rev[pol_unsort]
+    return fucci_time

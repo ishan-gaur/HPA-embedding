@@ -109,7 +109,7 @@ class HPA_DINO:
         x.to(self.device)
         return x
 
-    def predict_cls(self, dataset):
+    def predict_cls_dataset(self, dataset):
         cls_tokens = []
         for i in tqdm(range(0, len(dataset), self.batch_size)):
             sample = dataset[i:i+self.batch_size]
@@ -117,4 +117,41 @@ class HPA_DINO:
             cls = self.model(cleared_sample)
             cls_tokens.append(cls)
         cls_tokens = torch.cat(cls_tokens, dim=0).cpu()
+        return cls_tokens
+
+    def predict_cls_ref(self, sample):
+        # sample must have batch dimension and only DAPI and TUBL channels in that order
+        assert len(sample.shape) == 4
+        assert sample.shape[1] == 2
+
+        # model channels are rgby, r is tubl and b is dapi, rest need to be zeros
+        input_shape = list(sample.shape)
+        input_shape[1] = 4
+        input_sample = torch.zeros(input_shape)
+        input_sample[:, 0] = sample[:, 1]
+        input_sample[:, 2] = sample[:, 0]
+        cls_tokens = self.model(input_sample).detach().cpu()
+        return cls_tokens
+
+    def predict_cls_ref_concat(self, sample):
+        # sample must have batch dimension and only DAPI and TUBL channels in that order
+        assert len(sample.shape) == 4
+        assert sample.shape[1] == 2
+
+        # model channels are rgby, r is tubl and b is dapi, rest need to be zeros
+        input_shape = list(sample.shape)
+        input_shape[1] = 4
+        input_sample = torch.zeros(input_shape)
+
+        input_sample[:, 0] = sample[:, 1]
+        input_sample[:, 1] = sample[:, 0]
+        input_sample[:, 2] = sample[:, 0]
+
+        dapi_cls_tokens = self.model(input_sample).detach().cpu()
+
+        input_sample[:, 1] = sample[:, 1]
+        tubl_cls_tokens = self.model(input_sample).detach().cpu()
+
+        cls_tokens = torch.cat([dapi_cls_tokens, tubl_cls_tokens], dim=1)
+
         return cls_tokens

@@ -564,10 +564,26 @@ class PseudoRegressor(nn.Module):
         ) / (2 * torch.pi)
 
     def cart_loss(self, theta_pred, y):
-        return torch.mean(PseudoRegressor.cart_distance(theta_pred, y))
+        loss = PseudoRegressor.cart_distance(theta_pred, y)
+        return loss
 
     def arc_loss(self, theta_pred, y):
-        return torch.mean(torch.pow(PseudoRegressor.arc_distance(theta_pred, y), 2))
+        loss = PseudoRegressor.arc_distance(theta_pred, y)
+        return torch.pow(loss, 2)
+
+    def bin_reweight(self, loss, y, nbin):
+        bin_ct = torch.histc(y, nbin)
+        bin_ct_avg = torch.mean(bin_ct)
+        bin_weights = bin_ct_avg / bin_ct
+        bin_weights[bin_weights == float("inf")] = bin_weights[bin_weights != float("inf")].max()
+        bins = torch.linspace(y.min(), y.max(), nbin + 1).to(y.device)
+        binned_y = torch.bucketize(y, bins)
+        binned_y[binned_y == 0] = 1
+        binned_y -= 1
+        loss_weights = torch.index_select(bin_weights, 0, binned_y)
+        loss = loss * loss_weights
+        return loss
+
 
 
 class PseudoRegressorLit(RegressorLit):
@@ -587,18 +603,23 @@ class PseudoRegressorLit(RegressorLit):
         dropout: bool = False,
         batchnorm: bool = False,
         loss_type: str = "arc",
+        reweight_loss: bool = False,
+        bins: int = 10,
     ):
         super().__init__()
         if d_hidden is None:
             d_hidden = d_input
         self.save_hyperparameters()
-        self.model = PseudoRegressor(d_input=d_input, d_hidden=d_hidden, n_hidden=n_hidden, d_output=d_output, dropout=dropout, batchnorm=batchnorm)
+        self.model = PseudoRegressor(d_input=d_input, d_hidden=d_hidden, n_hidden=n_hidden, d_output=d_output, dropout=dropout, 
+                                    batchnorm=batchnorm)
         self.model = torch.compile(self.model)
         self.lr = lr
         self.train_preds, self.val_preds, self.test_preds = [], [], []
         self.train_labels, self.val_labels, self.test_labels = [], [], []
         self.num_classes = d_output
         self.loss_type = loss_type
+        self.reweight_loss = reweight_loss
+        self.bins = bins
 
     def _shared_step(self, batch, batch_idx, stage):
         x, y = batch
@@ -608,9 +629,13 @@ class PseudoRegressorLit(RegressorLit):
         cart_loss = self.model.cart_loss(theta_pred, y)
         arc_loss = self.model.arc_loss(theta_pred, y)
         preds, labels = theta_pred.detach().cpu(), y.detach().cpu()
-        self.log(f"{stage}/loss", arc_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        self.log(f"{stage}/cart_loss", cart_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        self.log(f"{stage}/loss", torch.mean(arc_loss), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        self.log(f"{stage}/cart_loss", torch.mean(cart_loss), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         loss = cart_loss if self.loss_type == "cart" else arc_loss
+        if self.reweight_loss:
+            loss = self.model.bin_reweight(loss, y, self.bins)
+            self.log(f"{stage}/loss_reweighted", torch.mean(loss), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        loss = torch.mean(loss)
         return loss, preds, labels
 
     @rank_zero_only
@@ -650,4 +675,67 @@ class PseudoRegressorLit(RegressorLit):
         residuals = PseudoRegressor.arc_distance(preds, labels)
         ax = sns.jointplot(x=labels, y=residuals, kind="hist")
         super()._log_image(stage, "residuals", ax)
+        plt.close()
+
+        # create confusion matrix
+        bins = torch.linspace(0, 1, self.bins + 1).to(preds.device)
+        binned_preds = torch.bucketize(preds_pseudotime, bins)
+        binned_preds[binned_preds == 0] = 1
+        binned_preds -= 1
+        binned_labels = torch.bucketize(labels, bins)
+        binned_labels[binned_labels == 0] = 1
+        binned_labels -= 1
+
+        # need to add one example of each class prediction pair to the confusion matrix
+        preds_lapl = [binned_preds]
+        preds_lapl.extend([torch.arange(len(bins) - 1).to(preds.device)] * (len(bins) - 1))
+        binned_preds = torch.cat(preds_lapl)
+        labels_lapl = [binned_labels]
+        labels_lapl.extend([torch.ones(len(bins) - 1).to(preds.device) * i for i in range(len(bins) - 1)])
+        binned_labels = torch.cat(labels_lapl)
+
+        cm = confusion_matrix(binned_labels, binned_preds)
+        # normalize the rows
+        cm = cm / cm.sum(axis=1, keepdims=True)
+        # print(cm)
+        # ax = sns.heatmap(cm.astype(np.int32), annot=True, fmt="d", vmin=0, vmax=len(labels))
+        plt.clf()
+        ax = sns.heatmap(cm, vmin=0, vmax=1.0, annot=True, fmt=".2f")
+        ax.set_xlabel("Predicted")
+        ax.xaxis.set_ticklabels([f"{i:.2f}" for i in bins[1:]])
+        ax.set_ylabel("True")
+        ax.yaxis.set_ticklabels([f"{i:.2f}" for i in bins[1:]])
+        super()._log_image(stage, f"cm_{self.bins}", ax)
+        plt.close()
+
+        # create confusion matrix
+        eval_bins = 3
+        bins = torch.linspace(0, 1, eval_bins + 1).to(preds.device)
+        binned_preds = torch.bucketize(preds_pseudotime, bins)
+        binned_preds[binned_preds == 0] = 1
+        binned_preds -= 1
+        binned_labels = torch.bucketize(labels, bins)
+        binned_labels[binned_labels == 0] = 1
+        binned_labels -= 1
+
+        # need to add one example of each class prediction pair to the confusion matrix
+        preds_lapl = [binned_preds]
+        preds_lapl.extend([torch.arange(len(bins) - 1).to(preds.device)] * (len(bins) - 1))
+        binned_preds = torch.cat(preds_lapl)
+        labels_lapl = [binned_labels]
+        labels_lapl.extend([torch.ones(len(bins) - 1).to(preds.device) * i for i in range(len(bins) - 1)])
+        binned_labels = torch.cat(labels_lapl)
+
+        cm = confusion_matrix(binned_labels, binned_preds)
+        # normalize the rows
+        cm = cm / cm.sum(axis=1, keepdims=True)
+        # print(cm)
+        plt.clf()
+        # ax = sns.heatmap(cm.astype(np.int32), annot=True, fmt="d", vmin=0, vmax=len(labels))
+        ax = sns.heatmap(cm, vmin=0, vmax=1.0, annot=True, fmt=".2f")
+        ax.set_xlabel("Predicted")
+        ax.xaxis.set_ticklabels([f"{i:.2f}" for i in bins[1:]])
+        ax.set_ylabel("True")
+        ax.yaxis.set_ticklabels([f"{i:.2f}" for i in bins[1:]])
+        super()._log_image(stage, f"cm", ax)
         plt.close()

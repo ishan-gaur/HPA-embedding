@@ -286,14 +286,60 @@ class RefChannelIntensityDM(LightningDataModule):
         return self.__shared_dataloader(self.test_dataset)
 
 class RefChannelPseudo(Dataset):
-    def __init__(self, data_dir, data_name, HPA=False):
-        if not HPA:
+    def __init__(self, data_dir, data_name, HPA=False, dataset=None, concat_well_stats=False):
+        if HPA:
+            if not dataset is None and not concat_well_stats:
+                if type(dataset) == str:
+                    dataset = (dataset,)
+                assert type(dataset) == tuple, "Must provide tuple of datasets"
+                self.X, self.Y = [], []
+                for src_dataset in dataset:
+                    print(f"Loading {src_dataset}_HPA_DINO_cls_concat_tokens.pt")
+                    print(f"Loading {src_dataset}_pseudotime.npy")
+                    self.X.append(torch.load(data_dir / f"{src_dataset}_HPA_DINO_cls_concat_tokens.pt"))
+                    self.Y.append(np.load(data_dir / f"{src_dataset}_pseudotime.npy"))
+                self.X = torch.cat(self.X)
+                self.Y = torch.tensor(np.concatenate(self.Y))
+            # elif concat_well_stats and not dataset is None and type(dataset) == str:
+            #     self.X = torch.load(data_dir / f"{dataset}_HPA_DINO_cls_concat_tokens.pt")
+            #     print(f"Loaded {dataset}_HPA_DINO_cls_concat_tokens.pt")
+            #     self.Y = torch.tensor(np.load(data_dir / f"FUCCI_pseudotime_normalized.npy"))
+            #     print(f"Loaded FUCCI_pseudotime_normalized.npy")
+            #     self.well_stats = torch.load(data_dir / f"image_well_percentiles_64.pt")
+            #     print(f"Loaded image_well_percentiles_64.pt")
+            #     print(type(self.well_stats[0]))
+            #     print(len(self.well_stats[0]))
+            #     self.well_stats = self.well_stats[:, :2, :] # N x C x P
+            #     self.well_stats = self.well_stats.reshape(self.well_stats.size(0), -1)
+            #     self.X = torch.cat((self.X, self.well_stats), dim=1)
+            #     print(f"Concatenated well stats to X, new shape: {self.X.shape}")
+            elif concat_well_stats and not dataset is None:
+                self.X, self.well_stats, self.Y = [], [], []
+                if type(dataset) == str:
+                    dataset = (dataset,)
+                    if dataset[0] == "fucci" and len(dataset) == 1:
+                        dataset = ("fucci_cham", "fucci_tile", "fucci_over")
+                datasets = dataset
+                for src_dataset in datasets:
+                    print(f"Loading {src_dataset}_HPA_DINO_cls_concat_tokens.pt")
+                    print(f"Loading {src_dataset}_pseudotime_normalized.npy")
+                    self.X.append(torch.load(data_dir / f"{src_dataset}_HPA_DINO_cls_concat_tokens.pt"))
+                    self.well_stats.append(np.load(data_dir / f"{src_dataset}_intensity_percentiles.npy"))
+                    self.Y.append(np.load(data_dir / f"{src_dataset}_pseudotime_normalized.npy"))
+                self.X = torch.cat(self.X)
+                self.Y = torch.tensor(np.concatenate(self.Y))
+                self.well_stats = np.concatenate(self.well_stats)
+                self.well_stats = torch.tensor(self.well_stats).float()
+                self.X = torch.cat((self.X, self.well_stats), dim=1)
+
+            else:
+                self.X = torch.load(data_dir / f"HPA_DINO_cls_{data_name}.pt")
+                print(f"Loaded HPA_DINO_cls_{data_name}.pt")
+                self.Y = torch.tensor(np.load(data_dir / f"FUCCI_pseudotime_{data_name}.npy")).flatten()
+        else:
             self.X = torch.load(data_dir / f"ref_embeddings_{data_name}.pt")
             print(f"Loaded ref_embeddings_{data_name}.pt")
-        else:
-            self.X = torch.load(data_dir / f"HPA_DINO_cls_{data_name}.pt")
-            print(f"Loaded HPA_DINO_cls_{data_name}.pt")
-        self.Y = torch.tensor(np.load(data_dir / f"FUCCI_pseudotime_{data_name}.npy")).flatten()
+            self.Y = torch.tensor(np.load(data_dir / f"FUCCI_pseudotime_{data_name}.npy")).flatten()
         self.X, self.Y = self.X.float(), self.Y.float()
 
     def __getitem__(self, idx):
@@ -307,7 +353,7 @@ class RefChannelPseudoDM(LightningDataModule):
     Data module for training a classifier on top of DINO embeddings of DAPI+TUBL reference channels
     Trying to match labels from a GMM or Ward cluster labeling algorithm of the FUCCI channel intensities
     """
-    def __init__(self, data_dir, data_name, batch_size, num_workers, split, HPA=False):
+    def __init__(self, data_dir, data_name, batch_size, num_workers, split, HPA=False, dataset=None, concat_well_stats=False):
         super().__init__()
         self.data_dir = data_dir
         self.data_name = data_name
@@ -315,10 +361,21 @@ class RefChannelPseudoDM(LightningDataModule):
         self.num_workers = num_workers
         self.split = split
 
-        self.dataset = RefChannelPseudo(self.data_dir, self.data_name, HPA=HPA)
-        generator = torch.Generator().manual_seed(420)
-        self.train_dataset, self.val_dataset, self.test_dataset = random_split(self.dataset, self.split, generator=generator)
-        self.split_indices = {"train": self.train_dataset.indices, "val": self.val_dataset.indices, "test": self.test_dataset.indices}
+        if type(dataset) is str:
+            self.dataset = RefChannelPseudo(self.data_dir, self.data_name, HPA=HPA, dataset=dataset, concat_well_stats=concat_well_stats)
+            generator = torch.Generator().manual_seed(420)
+            self.train_dataset, self.val_dataset, self.test_dataset = random_split(self.dataset, self.split, generator=generator)
+            self.split_indices = {"train": self.train_dataset.indices, "val": self.val_dataset.indices, "test": self.test_dataset.indices}
+        else:
+            assert type(dataset) == tuple, "Must provide tuple of datasets"
+            assert len(dataset) == 3, "Must provide tuple of datasets of length 3, one for each split"
+            print("Loading Training Dataset")
+            self.train_dataset = RefChannelPseudo(self.data_dir, self.data_name, HPA=HPA, dataset=dataset[0], concat_well_stats=concat_well_stats)
+            print("Loading Validation Dataset")
+            self.val_dataset = RefChannelPseudo(self.data_dir, self.data_name, HPA=HPA, dataset=dataset[1], concat_well_stats=concat_well_stats)
+            print("Loading Testing Dataset")
+            self.test_dataset = RefChannelPseudo(self.data_dir, self.data_name, HPA=HPA, dataset=dataset[2], concat_well_stats=concat_well_stats)
+            self.split_indices = {"train": torch.arange(len(self.train_dataset)), "val": torch.arange(len(self.val_dataset)), "test": torch.arange(len(self.test_dataset))}
 
     def __shared_dataloader(self, dataset, shuffle=False):
         return DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, persistent_workers=True, shuffle=shuffle)

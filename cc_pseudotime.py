@@ -73,6 +73,7 @@ def stretch_time(time_data, nbins=1000):
     n, bins, patches = plt.hist(
         time_data, histedges_equalN(time_data, nbins), density=True
     )
+    plt.close()
     tmp_time_data = deepcopy(time_data)
     trans_time = np.zeros([len(time_data)])
 
@@ -91,7 +92,7 @@ def calc_R(xc, yc, x, y):
 
 def f_2(c, x, y):
     """Calculate the algebraic distance between the data points and the mean circle centered at c=(xc, yc)"""
-    print(c)
+    # print(c)
     Ri = calc_R(c[0], c[1], x, y)
     return Ri - Ri.mean()
 

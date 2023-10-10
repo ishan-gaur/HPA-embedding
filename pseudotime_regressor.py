@@ -25,6 +25,7 @@ parser.add_argument("-d", "--data", required=True, help="path to dataset folder"
 parser.add_argument("-n", "--name", required=True, help="dataset version name")
 parser.add_argument("-e", "--epochs", type=int, default=100, help="maximum number of epochs to train for")
 parser.add_argument("-c", "--checkpoint", help="path to checkpoint to load from")
+parser.add_argument("--best", action="store_true", help="load best checkpoint instead of last checkpoint")
 parser.add_argument("-r", "--run", default=time.strftime('%Y_%m_%d_%H_%M'), help="Name to help lookup the run's logging directory")
 
 args = parser.parse_args()
@@ -33,16 +34,32 @@ args = parser.parse_args()
 # Experiment parameters and logging
 ##########################################################################################
 HPA = True
-CART = True
-DINO_INPUT = 768 if HPA else DINO.CLS_DIM
+dataset = (("fucci_cham", "fucci_tile"), "fucci_over", "fucci_over")
+# dataset = (("fucci_cham", "fucci_tile"), "fucci_cham", "fucci_over")
+# dataset = (("fucci_cham", "fucci_tile"), "fucci_tile", "fucci_over")
+# dataset = ("fucci_cham", ("fucci_tile", "fucci_over"), "fucci_over")
+# dataset = "fucci_cham"
+concat_well_stats = True
+CART = False
+if not HPA:
+    DINO_INPUT = DINO.CLS_DIM
+else:
+    DINO_INPUT = 768 if dataset is None else 2 * 768
+if concat_well_stats:
+    DINO_INPUT += 2 * 64
 config = {
     "HPA": HPA,
+    "dataset": dataset,
+    "concat_well_stats": concat_well_stats,
     "loss_type": "cart" if CART else "arc",
-    "batch_size": 32,
-    # "batch_size": 64,
-    # "devices": [0, 1, 2, 3, 4, 5, 6, 7],
+    "reweight_loss": True,
+    "bins": 6,
+    # "batch_size": 32,
+    "batch_size": 64,
+    "devices": [0, 1, 2, 3, 4, 5, 6, 7],
     # "devices": [0, 1, 2, 3],
-    "devices": [4, 5, 6, 7],
+    # "devices": [1, 2, 3, 4],
+    # "devices": [4, 5, 6, 7],
     # "devices": [0],
     # "devices": [7],
     # "devices": [0, 1, 2, 3, 4],
@@ -50,12 +67,13 @@ config = {
     "split": (0.64, 0.16, 0.2),
     "conv": False,
     "lr": 1e-4,
+    # "lr": 0,
     "epochs": args.epochs,
     "nf": 16,
-    "n_hidden": 1,
+    "n_hidden": 3,
     # "n_hidden": 1,
     # "d_hidden": DINO_INPUT * 12,
-    "d_hidden": DINO_INPUT * 4,
+    "d_hidden": DINO_INPUT * 2,
     "dropout": False,
     "batchnorm": True,
     "num_classes": 1
@@ -104,17 +122,26 @@ if args.checkpoint is not None:
         raise ValueError(f"Multiple possible checkpoints found: {checkpoint_folder}")
     if len(checkpoint_folder) == 0:
         raise ValueError(f"No checkpoint found for glob pattern: {chkpt_dir_pattern}")
-    args.checkpoint = Path(checkpoint_folder[0]).parent.parent / "lightning_logs" / "last.ckpt"
+    models_folder = Path(checkpoint_folder[0]).parent.parent / "lightning_logs"
+    if args.best:
+        models_list = list(models_folder.iterdir())
+        models_list.sort()
+        # the elements should be ###-##.ckpt, 'epoch=###.ckpt', and 'last.ckpt'
+        args.checkpoint = models_list[0]
+    else:
+        args.checkpoint = models_folder / "last.ckpt"
     if not args.checkpoint.exists():
         raise ValueError(f"Checkpoint path {args.checkpoint} does not exist")
 
 print_with_time("Setting up model and data module...")
 if not config["conv"]:
-    dm = RefChannelPseudoDM(fucci_path, args.name, config["batch_size"], config["num_workers"], config["split"], HPA=config["HPA"])
+    dm = RefChannelPseudoDM(fucci_path, args.name, config["batch_size"], config["num_workers"], config["split"], HPA=config["HPA"], 
+                            dataset=config["dataset"], concat_well_stats=config["concat_well_stats"])
     if args.checkpoint is None:
         print("Training from scratch")
         model = PseudoRegressorLit(d_input=DINO_INPUT, d_output=NUM_CLASSES, d_hidden=config["d_hidden"], n_hidden=config["n_hidden"], 
-                            dropout=config["dropout"], batchnorm=["batchnorm"], lr=config["lr"], loss_type=config["loss_type"])
+                            dropout=config["dropout"], batchnorm=["batchnorm"], lr=config["lr"], loss_type=config["loss_type"],
+                            reweight_loss=config["reweight_loss"], bins=config["bins"])
     else:
         print(f"Loading checkpoint from {args.checkpoint}")
         model = PseudoRegressorLit.load_from_checkpoint(args.checkpoint)
@@ -130,6 +157,11 @@ else:
     # dataset_config = import_module(str(config_file.stem))
     # model = ClassifierLit(conv=True, imsize=dataset_config.output_image_size, nc=NUM_CHANNELS, nf=config["nf"], d_output=NUM_CLASSES,
     #                       dropout=config["dropout"], lr=config["lr"], soft=config["soft"])
+
+model.lr = config["lr"]
+model.loss_type = config["loss_type"]
+model.reweight_loss = config["reweight_loss"]
+model.bins = config["bins"]
 
 wandb_logger.watch(model, log="all", log_freq=10)
 
