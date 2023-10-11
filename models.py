@@ -10,6 +10,8 @@ from typing import Any, Tuple
 from sklearn.metrics import confusion_matrix, accuracy_score
 import seaborn as sns
 import matplotlib.pyplot as plt
+from glob import glob
+from pathlib import Path
 
 class Classifier(nn.Module):
     def __init__(self,
@@ -739,3 +741,23 @@ class PseudoRegressorLit(RegressorLit):
         ax.yaxis.set_ticklabels([f"{i:.2f}" for i in bins[1:]])
         super()._log_image(stage, f"cm", ax)
         plt.close()
+
+def load_model(checkpoint_hash, log_dirs_home):
+    chkpt_dir_pattern = f"{log_dirs_home}/*/*/*-{checkpoint_hash}/"
+    checkpoint_folder = glob(chkpt_dir_pattern)
+    if len(checkpoint_folder) > 1:
+        raise ValueError(f"Multiple possible checkpoints found: {checkpoint_folder}")
+    if len(checkpoint_folder) == 0:
+        raise ValueError(f"No checkpoint found for glob pattern: {chkpt_dir_pattern}")
+    models_folder = Path(checkpoint_folder[0]).parent.parent / "lightning_logs"
+    models_list = list(models_folder.iterdir())
+    models_list.sort()
+    # the elements should be ###-##.ckpt, 'epoch=###.ckpt', and 'last.ckpt'
+    checkpoint = models_list[0]
+    if not checkpoint.exists():
+        raise ValueError(f"Checkpoint path {checkpoint} does not exist")
+
+    print(f"Loading {checkpoint}")
+    cls_to_pseudotime = PseudoRegressorLit.load_from_checkpoint(checkpoint)
+    print(cls_to_pseudotime.device)
+    return cls_to_pseudotime

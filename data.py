@@ -361,7 +361,7 @@ class RefChannelPseudoDM(LightningDataModule):
         self.num_workers = num_workers
         self.split = split
 
-        if type(dataset) is str:
+        if type(dataset) is str or type(dataset) is list:
             self.dataset = RefChannelPseudo(self.data_dir, self.data_name, HPA=HPA, dataset=dataset, concat_well_stats=concat_well_stats)
             generator = torch.Generator().manual_seed(420)
             self.train_dataset, self.val_dataset, self.test_dataset = random_split(self.dataset, self.split, generator=generator)

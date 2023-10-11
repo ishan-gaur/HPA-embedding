@@ -34,11 +34,13 @@ args = parser.parse_args()
 # Experiment parameters and logging
 ##########################################################################################
 HPA = True
-dataset = (("fucci_cham", "fucci_tile"), "fucci_over", "fucci_over")
+# dataset = (("fucci_cham", "fucci_tile"), "fucci_over", "fucci_over")
 # dataset = (("fucci_cham", "fucci_tile"), "fucci_cham", "fucci_over")
 # dataset = (("fucci_cham", "fucci_tile"), "fucci_tile", "fucci_over")
 # dataset = ("fucci_cham", ("fucci_tile", "fucci_over"), "fucci_over")
+# dataset = ["fucci_cham", "fucci_tile"]
 # dataset = "fucci_cham"
+dataset = "fucci_tile"
 concat_well_stats = True
 CART = False
 if not HPA:
@@ -64,7 +66,8 @@ config = {
     # "devices": [7],
     # "devices": [0, 1, 2, 3, 4],
     "num_workers": 1,
-    "split": (0.64, 0.16, 0.2),
+    # "split": (0.64, 0.16, 0.2),
+    "split": (0.8, 0.2, 0.0),
     "conv": False,
     "lr": 1e-4,
     # "lr": 0,
