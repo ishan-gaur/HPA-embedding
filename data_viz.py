@@ -148,3 +148,33 @@ def plot_hist_w_threshold(metric, threshold, output_file):
     plt.axvline(threshold, color='r', linestyle='dashed', linewidth=1)
     plt.savefig(output_file)
     plt.clf()
+
+def plots_to_fig_grid(plot_figs):
+    plot_images = []
+    for plot in plot_figs:
+        plot.canvas.draw()
+        plot_images.append(np.frombuffer(plot.canvas.tostring_rgb(), dtype=np.uint8).reshape(plot.canvas.get_width_height()[::-1] + (3,)))
+        plt.close(plot)
+    
+    plt.clf()
+    plt.imshow(plot_images[0])
+    fig = plt.figure()
+    size = fig.get_size_inches()*fig.dpi
+    plt.close()
+
+    factor_w, factor_h = size / 100
+
+    plt.clf()
+    n_col = 5
+    rows, cols = int(np.ceil(len(plot_images) / n_col)), n_col
+
+    # for i in range(rows * cols - len(plot_images)):
+    #     plot_images.append(np.ones_like(plot_images[0]))
+
+    fig, axes = plt.subplots(rows, cols, figsize=(factor_w * cols, factor_h * rows), constrained_layout=True)
+    for i, ax in enumerate(axes.flatten()):
+        if i < len(plot_images):
+            ax.imshow(plot_images[i])
+        # ax.set_aspect('equal')
+        ax.axis("off")
+    plt.show()
