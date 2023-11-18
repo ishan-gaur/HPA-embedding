@@ -565,6 +565,11 @@ class PseudoRegressor(nn.Module):
             theta - theta_pred
         ) / (2 * torch.pi)
 
+    def reg_distance(theta_pred, y):
+        y_pred = theta_pred.remainder(2 * torch.pi)
+        y_pred = y_pred / (2 * torch.pi)
+        return y_pred - y
+
     def cart_loss(self, theta_pred, y):
         loss = PseudoRegressor.cart_distance(theta_pred, y)
         return loss
@@ -572,6 +577,9 @@ class PseudoRegressor(nn.Module):
     def arc_loss(self, theta_pred, y):
         loss = PseudoRegressor.arc_distance(theta_pred, y)
         return torch.pow(loss, 2)
+
+    def reg_loss(self, theta_pred, y):
+        return torch.pow(PseudoRegressor.reg_distance(theta_pred, y), 2)
 
     def bin_reweight(self, loss, y, nbin):
         bin_ct = torch.histc(y, nbin)
@@ -630,10 +638,13 @@ class PseudoRegressorLit(RegressorLit):
         y = y.squeeze()
         cart_loss = self.model.cart_loss(theta_pred, y)
         arc_loss = self.model.arc_loss(theta_pred, y)
+        reg_loss = self.model.reg_loss(theta_pred, y)
         preds, labels = theta_pred.detach().cpu(), y.detach().cpu()
-        self.log(f"{stage}/loss", torch.mean(arc_loss), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        self.log(f"{stage}/loss", torch.mean(reg_loss), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         self.log(f"{stage}/cart_loss", torch.mean(cart_loss), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        loss = cart_loss if self.loss_type == "cart" else arc_loss
+        self.log(f"{stage}/arc_loss", torch.mean(arc_loss), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        losses = {"cart": cart_loss, "arc": arc_loss, "reg": reg_loss}
+        loss = losses[self.loss_type]
         if self.reweight_loss:
             loss = self.model.bin_reweight(loss, y, self.bins)
             self.log(f"{stage}/loss_reweighted", torch.mean(loss), on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)

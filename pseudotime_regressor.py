@@ -38,11 +38,11 @@ HPA = True
 # dataset = (("fucci_cham", "fucci_tile"), "fucci_cham", "fucci_over")
 # dataset = (("fucci_cham", "fucci_tile"), "fucci_tile", "fucci_over")
 # dataset = ("fucci_cham", ("fucci_tile", "fucci_over"), "fucci_over")
-# dataset = ["fucci_cham", "fucci_tile"]
+dataset = ["fucci_cham", "fucci_tile"]
 # dataset = "fucci_cham"
-dataset = "fucci_tile"
+# dataset = "fucci_tile"
 concat_well_stats = True
-CART = False
+loss_type = "reg" # "cart" "arc"
 if not HPA:
     DINO_INPUT = DINO.CLS_DIM
 else:
@@ -53,7 +53,7 @@ config = {
     "HPA": HPA,
     "dataset": dataset,
     "concat_well_stats": concat_well_stats,
-    "loss_type": "cart" if CART else "arc",
+    "loss_type": loss_type,
     "reweight_loss": True,
     "bins": 6,
     # "batch_size": 32,
