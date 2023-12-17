@@ -46,7 +46,6 @@ class Classifier(nn.Module):
 
     def loss(self, y_pred, y):
         return nn.CrossEntropyLoss()(y_pred, y)
-    
 
 class ConvClassifier(nn.Module):
     def __init__(self,
@@ -104,7 +103,6 @@ class ConvClassifier(nn.Module):
     def loss(self, y_pred, y):
         return nn.CrossEntropyLoss()(y_pred, y)
         
-
 class ClassifierLit(lightning.LightningModule):
     def __init__(self,
         conv: bool = False,
@@ -237,7 +235,6 @@ class DINO(nn.Module):
         assert len(crop_slices) == 2, "Error in creating the crop slices for use with the DINO model. Only 2D images are supported. imsize might have more than 2 elements."
         return crop_slices
         
-    
 class DINOClassifier(lightning.LightningModule):
     def __init__(self,
         imsize: Tuple[int, int] = 256,
@@ -277,7 +274,6 @@ class DINOClassifier(lightning.LightningModule):
     
     def configure_optimizers(self):
         return torch.optim.Adam(self.classifier.parameters(), lr=self.lr)
-
 
 class Regressor(nn.Module):
     """
@@ -326,7 +322,6 @@ class Regressor(nn.Module):
     def loss(self, y_pred, y):
         return nn.MSELoss()(y_pred, y)
 
-    
 class RegressorLit(lightning.LightningModule):
     """
     Lightning module for training a regression model
@@ -501,7 +496,6 @@ class RegressorLit(lightning.LightningModule):
     def configure_optimizers(self):
         return optim.Adam(self.parameters(), lr=self.lr)
 
-
 class PseudoRegressor(nn.Module):
     """
     Simple feed-forward regression module
@@ -593,8 +587,6 @@ class PseudoRegressor(nn.Module):
         loss_weights = torch.index_select(bin_weights, 0, binned_y)
         loss = loss * loss_weights
         return loss
-
-
 
 class PseudoRegressorLit(RegressorLit):
     """
