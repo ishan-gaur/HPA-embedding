@@ -75,7 +75,7 @@ def getCroppedImage(mask, image, imsize):
         total_padding = desired - current
         padding_one_side = total_padding // 2
         padding.append((padding_one_side, total_padding - padding_one_side) if current < desired else (0, 0))
-    crop_padded = (np.pad(crop, padding, mode='constant', constant_values=0) / 256).astype(np.int16)
+    crop_padded = (np.pad(crop, padding, mode='constant', constant_values=0) / crop.max().astype(np.float32)).astype(np.float32)
     return crop_padded[:, :imsize, :imsize]
 
 def getPseudotimeMode(checkpoint_hash):
@@ -111,8 +111,8 @@ for well_id in tqdm(well_ids, total=len(well_ids)):
         with open(cell_indices_cache_file, 'rb') as f:
             well_cell_indices = pkl.load(f)
         print("loading from cache")
-        print(well_cls.shape)
-        print(well_percentiles.shape)
+        # print(well_cls.shape)
+        # print(well_percentiles.shape)
         cls.append(well_cls)
         percentiles.append(well_percentiles)
         cell_indices.extend(well_cell_indices)
@@ -130,15 +130,21 @@ for well_id in tqdm(well_ids, total=len(well_ids)):
 
         # decode the masks and get cropped cell images
         image_samples = well_samples[well_samples["ID"] == image_id]
-        src_imsize = image_samples.iloc[0]["ImageWidth"]
         rle_masks = image_samples["cellmask"]
-        masks = decodeToBinaryMask(rle_masks, src_imsize, src_imsize)
+        masks = decodeToBinaryMask(rle_masks, image.shape[1], image.shape[2])
         cell_images.extend([getCroppedImage(mask, image, imsize) for mask in masks])
         cell_indices.extend(image_samples.index.values.tolist())
 
     # get percentiles and DINO cls to get input embedding
-    dataset = torch.Tensor(cell_images)
-    dataset = dataset / dataset.max()
+    dataset = torch.Tensor(np.stack(cell_images))
+    print(dataset, dataset.max())
+    print(image.max())
+    print(masks.max())
+    sum_mask = np.zeros_like(masks[0])
+    for i in range(len(masks)):
+        sum_mask += masks[i]
+    print((image * sum_mask).max())
+    # dataset = dataset / dataset.max()
     values, percentiles_used = get_images_percentiles(dataset.numpy(), percentiles=eval_percentiles, non_zero=True)
     # print("VAL", values.shape)
     well_percentiles = torch.tensor(values)[:2].flatten()
@@ -150,7 +156,7 @@ for well_id in tqdm(well_ids, total=len(well_ids)):
     
     well_cls = torch.cat(cls[-1 * len(dataloader):], dim=0)
     well_folder = dataset_folder / well_id
-    print(well_cls.shape, well_percentiles.shape)
+    # print(well_cls.shape, well_percentiles.shape)
     torch.save(well_cls, cls_cache_file)
     torch.save(well_percentiles, percentiles_cache_file)
     with open(cell_indices_cache_file, 'wb') as f:
